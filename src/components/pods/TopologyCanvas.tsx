@@ -19,10 +19,10 @@ interface TopologyCanvasProps {
 }
 
 // Custom Host Node Component
-function HostNodeComponent({ data }: { data: { label: string; specs: string; memory: string; selected?: boolean } }) {
+function HostNodeComponent({ data }: { data: { label: string; specs: string; memory: string; ram?: string; selected?: boolean } }) {
   return (
     <div
-      className={`px-4 py-3 rounded-xl bg-[#121215] border text-left min-w-[210px] cursor-pointer transition-all duration-200 ${
+      className={`px-4 py-3 rounded-xl bg-[#121215] border text-left min-w-[220px] cursor-pointer transition-all duration-200 ${
         data.selected
           ? "border-emerald-500 shadow-lg shadow-emerald-500/10 ring-2 ring-emerald-500/40 scale-105"
           : "border-[#3f3f46] hover:border-[#71717a]"
@@ -36,20 +36,23 @@ function HostNodeComponent({ data }: { data: { label: string; specs: string; mem
         </div>
         <div>
           <span className="text-xs font-bold text-[#f4f4f5] block leading-tight">{data.label}</span>
-          <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold tracking-wider">PRIMARY HOST</span>
+          <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold tracking-wider">PRIMARY HOST WORKSTATION</span>
         </div>
       </div>
       <div className="text-[11px] font-mono text-[#f4f4f5] font-bold mt-1">{data.specs}</div>
-      <div className="text-[10px] font-mono text-[#71717a] mt-0.5">{data.memory} VRAM</div>
+      <div className="flex items-center gap-2 mt-1 text-[10px] font-mono text-[#a1a1aa]">
+        <span className="bg-[#18181c] px-1.5 py-0.5 rounded border border-[#27272a] font-bold text-emerald-400">{data.memory}</span>
+        {data.ram && <span className="bg-[#18181c] px-1.5 py-0.5 rounded border border-[#27272a] text-[#a1a1aa]">{data.ram}</span>}
+      </div>
     </div>
   );
 }
 
 // Custom P2P Node Component
-function PeerNodeComponent({ data }: { data: { label: string; specs: string; memory: string; ping: number; selected?: boolean } }) {
+function PeerNodeComponent({ data }: { data: { label: string; specs: string; memory: string; ram?: string; ping: number; selected?: boolean } }) {
   return (
     <div
-      className={`px-4 py-3 rounded-xl bg-[#121215] border text-left min-w-[195px] cursor-pointer transition-all duration-200 ${
+      className={`px-4 py-3 rounded-xl bg-[#121215] border text-left min-w-[210px] cursor-pointer transition-all duration-200 ${
         data.selected
           ? "border-emerald-500 shadow-lg shadow-emerald-500/10 ring-2 ring-emerald-500/40 scale-105"
           : "border-[#27272a] hover:border-[#3f3f46]"
@@ -69,7 +72,10 @@ function PeerNodeComponent({ data }: { data: { label: string; specs: string; mem
         </span>
       </div>
       <div className="text-[11px] font-mono text-[#f4f4f5] font-semibold">{data.specs}</div>
-      <div className="text-[10px] font-mono text-[#71717a] mt-0.5">{data.memory} VRAM</div>
+      <div className="flex items-center gap-2 mt-1 text-[10px] font-mono text-[#a1a1aa]">
+        <span className="bg-[#18181c] px-1.5 py-0.5 rounded border border-[#27272a] font-bold text-emerald-400">{data.memory}</span>
+        {data.ram && <span className="bg-[#18181c] px-1.5 py-0.5 rounded border border-[#27272a] text-[#a1a1aa]">{data.ram}</span>}
+      </div>
     </div>
   );
 }
@@ -99,6 +105,7 @@ export function TopologyCanvas({ nodes, selectedNodeId, onSelectNode }: Topology
             label: node.hostname,
             specs: node.deviceType,
             memory: `${node.allocatedMemory}/${node.totalMemory}`,
+            ram: node.ramSize,
             ping: node.latencyMs,
             selected: isSelected,
             rawNode: node,
@@ -124,6 +131,7 @@ export function TopologyCanvas({ nodes, selectedNodeId, onSelectNode }: Topology
           label: node.hostname,
           specs: node.deviceType,
           memory: `${node.allocatedMemory}/${node.totalMemory}`,
+          ram: node.ramSize,
           ping: node.latencyMs,
           selected: isSelected,
           rawNode: node,

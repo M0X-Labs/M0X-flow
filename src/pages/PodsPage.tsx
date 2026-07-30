@@ -5,34 +5,66 @@ import { NodeStatsCard, NodeInfo } from "@/components/pods/NodeStatsCard";
 import { useRuntimeStore } from "@/lib/useRuntimeStore";
 import { useModelStore } from "@/lib/useModelStore";
 
-const DEFAULT_HOST_NODE: NodeInfo = {
-  id: "host-node",
-  hostname: "Host Workstation",
-  deviceType: "Local GPU (24GB)",
-  allocatedMemory: "0.0 GB",
-  totalMemory: "24 GB",
-  latencyMs: 0,
-  ipAddress: "127.0.0.1 (Host)",
-  isHost: true,
-  assignedLayers: "Standby (No Model Hosted)",
-  status: "rebalancing",
-};
-
 /**
  * PodsPage — Pods Topology Visualizer at /pods.
  * Discovers and renders REAL devices available on local LAN & Wi-Fi network using sidecar APIs.
  */
 const LOCAL_STORAGE_PODS_KEY = "m0x_pods_enabled_preference";
 
+function PodsSkeletonCanvas() {
+  return (
+    <div className="flex-1 w-full h-full flex items-center justify-center p-8 bg-[#09090b] relative overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:24px_24px] opacity-30" />
+      <div className="relative z-10 flex flex-col items-center gap-8 w-full max-w-xl">
+        <div className="w-72 p-4 rounded-2xl bg-[#121215] border border-[#27272a] animate-pulse space-y-3 shadow-2xl">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-[#18181c] border border-[#27272a]" />
+            <div className="space-y-1.5 flex-1">
+              <div className="h-3.5 bg-[#27272a] rounded w-32" />
+              <div className="h-2.5 bg-[#18181c] rounded w-20" />
+            </div>
+          </div>
+          <div className="h-4 bg-[#27272a] rounded w-44" />
+          <div className="h-3 bg-[#18181c] rounded w-28" />
+        </div>
+
+        <div className="w-0.5 h-10 bg-emerald-500/20 animate-pulse" />
+
+        <div className="flex items-center gap-4 flex-wrap justify-center w-full">
+          <div className="w-56 p-3.5 rounded-xl bg-[#121215] border border-[#27272a] animate-pulse space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-lg bg-[#18181c]" />
+              <div className="h-3 bg-[#27272a] rounded w-24" />
+            </div>
+            <div className="h-3 bg-[#18181c] rounded w-36" />
+          </div>
+          <div className="w-56 p-3.5 rounded-xl bg-[#121215] border border-[#27272a] animate-pulse space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-lg bg-[#18181c]" />
+              <div className="h-3 bg-[#27272a] rounded w-24" />
+            </div>
+            <div className="h-3 bg-[#18181c] rounded w-36" />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs font-mono text-[#a1a1aa] bg-[#121215] px-4 py-2 rounded-xl border border-[#27272a]">
+          <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+          <span>Probing real hardware specs & local LAN devices...</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PodsPage() {
   const { hostedModel, hostModel, unhostModel } = useRuntimeStore();
   const { downloadedModels } = useModelStore();
 
-  const [realNodes, setRealNodes] = useState<NodeInfo[]>([DEFAULT_HOST_NODE]);
+  const [realNodes, setRealNodes] = useState<NodeInfo[]>([]);
   const [podsEnabled, setPodsEnabled] = useState<boolean>(() => {
     return localStorage.getItem(LOCAL_STORAGE_PODS_KEY) === "true";
   });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [rescanning, setRescanning] = useState(false);
   const [showHostModal, setShowHostModal] = useState(false);
   const [showPeerModal, setShowPeerModal] = useState(false);
@@ -138,8 +170,7 @@ export function PodsPage() {
 
   // Map nodes to reflect active vs standby VRAM allocation
   const displayNodes = useMemo(() => {
-    const nodes = realNodes.length > 0 ? realNodes : [DEFAULT_HOST_NODE];
-    return nodes.map((node) => ({
+    return realNodes.map((node) => ({
       ...node,
       allocatedMemory: isExoHosted ? node.allocatedMemory : "0.0 GB",
       assignedLayers: isExoHosted ? node.assignedLayers : "Standby (No Model Hosted)",
@@ -150,7 +181,7 @@ export function PodsPage() {
     ? displayNodes.find((n: NodeInfo) => n.id === selectedNode.id) || displayNodes[0]
     : displayNodes[0];
 
-  const totalVramPool = displayNodes.reduce((acc: number, n: NodeInfo) => acc + (parseFloat(n.totalMemory) || 24), 0);
+  const totalVramPool = displayNodes.reduce((acc: number, n: NodeInfo) => acc + (parseFloat(n.totalMemory) || 0), 0);
   const allocatedVramPool = isExoHosted
     ? displayNodes.reduce((acc: number, n: NodeInfo) => acc + (parseFloat(n.allocatedMemory) || 0), 0)
     : 0;
@@ -211,9 +242,13 @@ export function PodsPage() {
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a] text-xs font-mono">
             <Zap className="w-3.5 h-3.5 text-[#a1a1aa]" />
             <span className="text-[#a1a1aa] font-medium font-sans">Pooled Memory:</span>
-            <span className="text-[#f4f4f5] font-bold">
-              {allocatedVramPool.toFixed(1)} / {totalVramPool.toFixed(0)} GB
-            </span>
+            {loading ? (
+              <div className="w-16 h-4 bg-[#27272a] rounded animate-pulse" />
+            ) : (
+              <span className="text-[#f4f4f5] font-bold">
+                {allocatedVramPool.toFixed(1)} / {totalVramPool.toFixed(0)} GB
+              </span>
+            )}
           </div>
 
           {isExoHosted ? (
@@ -274,12 +309,12 @@ export function PodsPage() {
       )}
 
       {/* Standby Banner if no model hosted */}
-      {!isExoHosted && (
+      {!isExoHosted && !loading && (
         <div className="bg-[#121215] border-b border-[#27272a] px-4 py-2 flex items-center justify-between text-xs text-[#a1a1aa]">
           <div className="flex items-center gap-2">
             <Server className="w-4 h-4 text-[#71717a]" />
             <span>
-              Cluster is in <strong>Standby</strong> ({realNodes.length} real devices discovered on LAN). Click <strong>"Host Model on Exo"</strong> to initialize distributed VRAM pooling.
+              Cluster is in <strong>Standby</strong> ({realNodes.length} real device{realNodes.length === 1 ? "" : "s"} discovered on LAN). Click <strong>"Host Model on Exo"</strong> to initialize distributed VRAM pooling.
             </span>
           </div>
         </div>
@@ -287,23 +322,23 @@ export function PodsPage() {
 
       {/* Main Canvas & Inspector View */}
       <div className="flex-1 relative flex overflow-hidden">
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center text-xs text-[#a1a1aa] gap-2 font-mono">
-            <Loader2 className="w-4 h-4 animate-spin text-emerald-400" /> Discovering real devices on local network...
-          </div>
+        {loading || displayNodes.length === 0 ? (
+          <PodsSkeletonCanvas />
         ) : (
           <>
             {/* React Flow Topology Canvas */}
             <TopologyCanvas
               nodes={displayNodes}
-              selectedNodeId={currentSelectedNode.id}
+              selectedNodeId={currentSelectedNode?.id}
               onSelectNode={(node) => setSelectedNode(node)}
             />
 
             {/* Hover / Selected Node Inspector Panel */}
-            <div className="absolute right-4 top-4 z-20">
-              <NodeStatsCard node={currentSelectedNode} />
-            </div>
+            {currentSelectedNode && (
+              <div className="absolute right-4 top-4 z-20">
+                <NodeStatsCard node={currentSelectedNode} />
+              </div>
+            )}
           </>
         )}
       </div>

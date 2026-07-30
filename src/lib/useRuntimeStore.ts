@@ -22,12 +22,12 @@ const DEFAULT_METRICS: HardwareMetrics = {
   isRunning: false,
   tokensPerSec: 0.0,
   vramUsedGB: 0.0,
-  vramTotalGB: 16.0,
-  ramUsedGB: 18.7,
-  ramTotalGB: 31.1,
+  vramTotalGB: 0.0,
+  ramUsedGB: 0.0,
+  ramTotalGB: 0.0,
   activeEngine: "Idle (No Model Loaded)",
-  temperature: "38°C",
-  gpuModel: "NVIDIA GeForce RTX 5080",
+  temperature: "--",
+  gpuModel: "",
 };
 
 // Global reactive state listeners
@@ -35,6 +35,7 @@ let globalHostedModel: HostedModel | null = null;
 let globalIsGenerating = false;
 let globalEngineMode: "standard" | "airllm" | "exo" = "exo";
 let globalMetrics: HardwareMetrics = DEFAULT_METRICS;
+let globalIsLoaded = false;
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -64,12 +65,14 @@ export function useRuntimeStore() {
             tokensPerSec: data.tokens_per_sec || 0.0,
             vramUsedGB: data.vram_used_gb || 0.0,
             vramTotalGB: data.vram_total_gb || 16.0,
-            ramUsedGB: data.ram_used_gb || 18.7,
-            ramTotalGB: data.ram_total_gb || 31.1,
+            ramUsedGB: data.ram_used_gb || 0.0,
+            ramTotalGB: data.ram_total_gb || 0.0,
             activeEngine: data.active_engine || "Idle (No Model Loaded)",
             temperature: data.is_running ? "48°C" : "38°C",
-            gpuModel: data.gpu_model || "NVIDIA GeForce RTX 5080",
+            gpuModel: data.gpu_model || "GPU Device",
           };
+          globalIsLoaded = true;
+
           if (data.hosted_model?.is_hosted) {
             globalHostedModel = {
               id: data.hosted_model.model_id,
@@ -150,6 +153,7 @@ export function useRuntimeStore() {
     isGenerating: globalIsGenerating,
     engineMode: globalEngineMode,
     metrics: globalMetrics,
+    isLoaded: globalIsLoaded,
     hostModel,
     unhostModel,
     setGenerating,

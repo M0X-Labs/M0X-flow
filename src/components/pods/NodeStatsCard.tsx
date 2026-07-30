@@ -1,4 +1,4 @@
-import { Laptop, Cpu, Network, Wifi, Activity, ShieldCheck } from "lucide-react";
+import { Laptop, Cpu, Network, Wifi, Activity, ShieldCheck, HardDrive } from "lucide-react";
 
 export interface NodeInfo {
   id: string;
@@ -6,6 +6,7 @@ export interface NodeInfo {
   deviceType: string;
   allocatedMemory: string;
   totalMemory: string;
+  ramSize?: string;
   latencyMs: number;
   ipAddress: string;
   isHost?: boolean;
@@ -52,9 +53,9 @@ export function NodeStatsCard({ node }: NodeStatsCardProps) {
       <div className="space-y-2.5 py-3 text-xs">
         <div className="flex justify-between items-center">
           <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">
-            <Cpu className="w-3.5 h-3.5 text-[#71717a]" /> Device Model
+            <Cpu className="w-3.5 h-3.5 text-[#71717a]" /> GPU Model
           </span>
-          <span className="text-[#f4f4f5] font-bold truncate max-w-[150px] text-right">{node.deviceType}</span>
+          <span className="text-[#f4f4f5] font-bold truncate max-w-[160px] text-right font-mono">{node.deviceType}</span>
         </div>
 
         <div>
@@ -81,6 +82,17 @@ export function NodeStatsCard({ node }: NodeStatsCardProps) {
             );
           })()}
         </div>
+
+        {node.ramSize && (
+          <div className="flex justify-between items-center">
+            <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">
+              <HardDrive className="w-3.5 h-3.5 text-[#71717a]" /> System RAM
+            </span>
+            <span className="font-mono text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
+              {node.ramSize}
+            </span>
+          </div>
+        )}
 
         <div className="flex justify-between items-center">
           <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">

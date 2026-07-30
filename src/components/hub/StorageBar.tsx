@@ -120,20 +120,32 @@ export function StorageBar({
             <div className="flex items-center justify-between text-xs font-medium flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-[#f4f4f5] font-bold tracking-tight">Host Model Storage</span>
-                <span className="text-[10px] font-mono text-[#a1a1aa] bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a] truncate max-w-[280px]">
-                  {storage.modelsDir}
-                </span>
+                {storage.modelsDir === "Loading..." ? (
+                  <div className="w-36 h-4 bg-[#18181c] rounded animate-pulse" />
+                ) : (
+                  <span className="text-[10px] font-mono text-[#a1a1aa] bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a] truncate max-w-[280px]">
+                    {storage.modelsDir}
+                  </span>
+                )}
               </div>
-              <span className="font-mono text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
-                {storage.usedGb.toFixed(1)} GB Used / {storage.freeGb.toFixed(1)} GB Free {storage.totalGb > 0 ? `(${storage.totalGb.toFixed(1)} GB Total Drive ${storage.driveLabel})` : ""}
-              </span>
+              {storage.totalGb === 0 ? (
+                <div className="w-40 h-4 bg-[#18181c] rounded animate-pulse" />
+              ) : (
+                <span className="font-mono text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
+                  {storage.usedGb.toFixed(1)} GB Used / {storage.freeGb.toFixed(1)} GB Free {storage.totalGb > 0 ? `(${storage.totalGb.toFixed(1)} GB Total Drive ${storage.driveLabel})` : ""}
+                </span>
+              )}
             </div>
 
             <div className="h-2 bg-[#18181c] rounded-full overflow-hidden border border-[#27272a] p-0.5">
-              <div
-                className="h-full bg-[#f4f4f5] rounded-full transition-all duration-300"
-                style={{ width: `${Math.max(percentage, 1)}%` }}
-              />
+              {storage.totalGb === 0 ? (
+                <div className="h-full w-full bg-[#27272a] animate-pulse rounded-full" />
+              ) : (
+                <div
+                  className="h-full bg-[#f4f4f5] rounded-full transition-all duration-300"
+                  style={{ width: `${Math.max(percentage, 1)}%` }}
+                />
+              )}
             </div>
           </div>
         </div>
