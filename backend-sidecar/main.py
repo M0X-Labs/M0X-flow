@@ -54,8 +54,16 @@ def save_models_dir(new_path_str: str) -> Path:
     MODELS_DIR = path
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    data["models_dir"] = str(path)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump({"models_dir": str(path)}, f, indent=2)
+        json.dump(data, f, indent=2)
 
     return MODELS_DIR
 
@@ -487,11 +495,74 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-class ConnectPeerRequest(BaseModel):
-    ip_address: str
-
-
 MANUAL_PEERS = []
+
+
+def load_saved_peers():
+    """Load persisted custom LAN peers from config.json."""
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "peers" in data and isinstance(data["peers"], list):
+                    for ip in data["peers"]:
+                        if ip and not any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
+                            MANUAL_PEERS.append({"ipAddress": ip})
+        except Exception:
+            pass
+
+
+def save_peers_to_config():
+    """Save manual peers list to config.json."""
+    try:
+        data = {}
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        data["peers"] = [p.get("ipAddress") for p in MANUAL_PEERS if p.get("ipAddress")]
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+PODS_ENABLED_CACHE: Optional[bool] = None
+
+
+def get_pods_enabled() -> bool:
+    """Retrieve whether Pods P2P cluster discovery is enabled."""
+    global PODS_ENABLED_CACHE
+    if PODS_ENABLED_CACHE is not None:
+        return PODS_ENABLED_CACHE
+
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                PODS_ENABLED_CACHE = bool(data.get("pods_enabled", False))
+                return PODS_ENABLED_CACHE
+        except Exception:
+            pass
+
+    PODS_ENABLED_CACHE = False
+    return False
+
+
+def set_pods_enabled(enabled: bool):
+    """Save Pods P2P cluster discovery enabled status to config.json and update cache."""
+    global PODS_ENABLED_CACHE
+    PODS_ENABLED_CACHE = enabled
+    try:
+        data = {}
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        data["pods_enabled"] = enabled
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[m0x-sidecar] Warning: failed to save pods_enabled to config: {e}", flush=True)
 
 
 def is_network_gateway(ip: str) -> bool:
@@ -507,9 +578,27 @@ def is_network_gateway(ip: str) -> bool:
     return False
 
 
+@app.get("/api/pods/config")
+async def get_pods_config():
+    """Get current Pods P2P cluster discovery status."""
+    return {"pods_enabled": get_pods_enabled()}
+
+
+class PodsConfigRequest(BaseModel):
+    pods_enabled: bool
+
+
+@app.post("/api/pods/config")
+async def update_pods_config(req: PodsConfigRequest):
+    """Enable or disable Pods P2P cluster discovery."""
+    set_pods_enabled(req.pods_enabled)
+    return {"status": "success", "pods_enabled": req.pods_enabled}
+
+
 @app.get("/api/pods/handshake")
 async def pods_handshake():
-    """Return real host hardware specifications for Exo P2P cluster peer pairing."""
+    """Return real host hardware specifications for Exo P2P cluster peer pairing if Pods is enabled."""
+    enabled = get_pods_enabled()
     gpu_name = get_real_gpu_info()
     vram_str = "16 GB"
     try:
@@ -520,9 +609,9 @@ async def pods_handshake():
         pass
 
     return {
-        "status": "ready",
+        "status": "ready" if enabled else "disabled",
         "engine": "m0x-flow-sidecar",
-        "pods_enabled": True,
+        "pods_enabled": enabled,
         "hostname": socket.gethostname(),
         "deviceType": gpu_name,
         "vram_total_gb": vram_str,
@@ -534,12 +623,17 @@ def verify_m0x_peer(ip: str, port: int = 14321):
     if is_network_gateway(ip):
         return None
 
-    # Probe /api/pods/handshake then fallback to /health
-    urls = [f"http://{ip}:{port}/api/pods/handshake", f"http://{ip}:{port}/health"]
+    urls = [
+        f"http://{ip}:{port}/api/pods/handshake",
+        f"http://{ip}:{port}/health",
+    ]
     for url in urls:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "m0x-flow-peer-probe"})
-            with urllib.request.urlopen(req, timeout=0.5) as resp:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "m0x-flow-peer-probe", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     if data.get("engine") == "m0x-flow-sidecar" and data.get("pods_enabled") is True:
@@ -547,7 +641,7 @@ def verify_m0x_peer(ip: str, port: int = 14321):
                             "ip": ip,
                             "hostname": data.get("hostname", f"m0x Peer ({ip})"),
                             "deviceType": data.get("deviceType", "m0x-flow Peer Node"),
-                            "totalMemory": data.get("vram_total_gb", "6 GB"),
+                            "totalMemory": data.get("vram_total_gb", "16 GB"),
                         }
         except Exception:
             pass
@@ -588,7 +682,7 @@ def measure_ping_latency(ip_str: str) -> float:
     t0 = time.time()
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.3)
+        s.settimeout(0.5)
         s.connect((clean_ip, 14321))
         s.close()
         return round((time.time() - t0) * 1000, 1)
@@ -597,11 +691,19 @@ def measure_ping_latency(ip_str: str) -> float:
     return round(abs((time.time() - t0) * 1000 + 0.8), 1)
 
 
+def get_subnet_prefix(host_ip: str) -> Optional[str]:
+    """Extract subnet prefix like '192.168.1.' or '10.0.0.' from host IP."""
+    parts = host_ip.split(".")
+    if len(parts) == 4 and host_ip != "127.0.0.1":
+        return f"{parts[0]}.{parts[1]}.{parts[2]}."
+    return None
+
+
 def scan_real_lan_devices():
     """Scan local network and filter ONLY computers running m0x-flow software with Pods enabled."""
+    load_saved_peers()
     discovered = []
 
-    # Get local IP interface to avoid adding self
     host_ip = "127.0.0.1"
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -611,8 +713,9 @@ def scan_real_lan_devices():
     except Exception:
         pass
 
-    # Read ARP table entries for potential peer candidate IPs
     candidate_ips = set()
+
+    # 1. Read ARP table entries
     try:
         res = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=3)
         if res.stdout:
@@ -623,16 +726,28 @@ def scan_real_lan_devices():
     except Exception:
         pass
 
-    # Include custom connected peers
+    # 2. Include saved peers
     for p in MANUAL_PEERS:
         ip = p.get("ipAddress", "")
         if ip and ip != host_ip and not is_network_gateway(ip):
             candidate_ips.add(ip)
 
+    # 3. Subnet sweep candidates (probe active host IP range)
+    subnet_prefix = get_subnet_prefix(host_ip)
+    if subnet_prefix:
+        try:
+            host_num = int(host_ip.split(".")[-1])
+            for offset in range(-25, 26):
+                target_num = host_num + offset
+                if 2 <= target_num <= 254 and target_num != host_num:
+                    candidate_ips.add(f"{subnet_prefix}{target_num}")
+        except Exception:
+            pass
+
     # Parallel software probe across candidate IPs
     verified_peers = []
     if candidate_ips:
-        with ThreadPoolExecutor(max_workers=min(10, len(candidate_ips))) as executor:
+        with ThreadPoolExecutor(max_workers=min(25, len(candidate_ips))) as executor:
             future_to_ip = {executor.submit(verify_m0x_peer, ip): ip for ip in candidate_ips}
             for future in future_to_ip:
                 try:
@@ -671,16 +786,24 @@ def scan_real_lan_devices():
 async def get_pods_nodes():
     """Return real discovered host machine and active LAN network devices running m0x-flow Pods."""
     host_node = get_real_host_node()
+    enabled = get_pods_enabled()
+    if not enabled:
+        return {"nodes": [host_node], "count": 1, "pods_enabled": False}
+
     peers = scan_real_lan_devices()
-    return {"nodes": [host_node] + peers, "count": 1 + len(peers)}
+    return {"nodes": [host_node] + peers, "count": 1 + len(peers), "pods_enabled": True}
 
 
 @app.post("/api/pods/rescan")
 async def rescan_pods_nodes():
     """Perform real-time network rescan for active m0x-flow Pods devices."""
     host_node = get_real_host_node()
+    enabled = get_pods_enabled()
+    if not enabled:
+        return {"status": "disabled", "nodes": [host_node], "count": 1, "pods_enabled": False}
+
     peers = scan_real_lan_devices()
-    return {"status": "rescanned", "nodes": [host_node] + peers, "count": 1 + len(peers)}
+    return {"status": "rescanned", "nodes": [host_node] + peers, "count": 1 + len(peers), "pods_enabled": True}
 
 
 @app.post("/api/pods/connect-peer")
@@ -706,13 +829,14 @@ async def connect_ip_peer(req: ConnectPeerRequest):
     if not verify_m0x_peer(ip):
         raise HTTPException(
             status_code=400,
-            detail=f"Device at {ip} is not running m0x-flow software or has Pods disabled."
+            detail=f"Could not connect to {ip}:14321. Ensure m0x Flow is running on that device & Windows Firewall allows port 14321."
         )
 
     lat = measure_ping_latency(ip)
     new_peer = {"ipAddress": ip, "latencyMs": lat}
     if not any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
         MANUAL_PEERS.append(new_peer)
+        save_peers_to_config()
 
     return {"status": "connected", "peer": new_peer}
 
@@ -760,10 +884,10 @@ def main():
 
     import uvicorn
 
-    print(f"[m0x-sidecar] Starting on http://localhost:{args.port}", flush=True)
+    print(f"[m0x-sidecar] Starting on http://0.0.0.0:{args.port} (LAN & Loopback)", flush=True)
     uvicorn.run(
         app,
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=args.port,
         log_level="info",
     )

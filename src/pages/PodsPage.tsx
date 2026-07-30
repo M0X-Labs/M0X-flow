@@ -22,11 +22,16 @@ const DEFAULT_HOST_NODE: NodeInfo = {
  * PodsPage — Pods Topology Visualizer at /pods.
  * Discovers and renders REAL devices available on local LAN & Wi-Fi network using sidecar APIs.
  */
+const LOCAL_STORAGE_PODS_KEY = "m0x_pods_enabled_preference";
+
 export function PodsPage() {
   const { hostedModel, hostModel, unhostModel } = useRuntimeStore();
   const { downloadedModels } = useModelStore();
 
   const [realNodes, setRealNodes] = useState<NodeInfo[]>([DEFAULT_HOST_NODE]);
+  const [podsEnabled, setPodsEnabled] = useState<boolean>(() => {
+    return localStorage.getItem(LOCAL_STORAGE_PODS_KEY) === "true";
+  });
   const [loading, setLoading] = useState(false);
   const [rescanning, setRescanning] = useState(false);
   const [showHostModal, setShowHostModal] = useState(false);
@@ -46,6 +51,10 @@ export function PodsPage() {
         if (data.nodes && Array.isArray(data.nodes)) {
           setRealNodes(data.nodes);
         }
+        if (typeof data.pods_enabled === "boolean") {
+          setPodsEnabled(data.pods_enabled);
+          localStorage.setItem(LOCAL_STORAGE_PODS_KEY, String(data.pods_enabled));
+        }
       }
     } catch {
       // fallback
@@ -53,6 +62,23 @@ export function PodsPage() {
       setLoading(false);
     }
   }, []);
+
+  const handleTogglePodsConfig = async () => {
+    const nextState = !podsEnabled;
+    setPodsEnabled(nextState);
+    localStorage.setItem(LOCAL_STORAGE_PODS_KEY, String(nextState));
+
+    try {
+      await fetch("http://localhost:14321/api/pods/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pods_enabled: nextState }),
+      });
+      await fetchRealLanNodes();
+    } catch {
+      // fallback
+    }
+  };
 
   const handleRescanNetwork = async () => {
     setRescanning(true);
@@ -62,6 +88,9 @@ export function PodsPage() {
         const data = await res.json();
         if (data.nodes && Array.isArray(data.nodes)) {
           setRealNodes(data.nodes);
+        }
+        if (typeof data.pods_enabled === "boolean") {
+          setPodsEnabled(data.pods_enabled);
         }
       }
     } catch {
@@ -163,7 +192,22 @@ export function PodsPage() {
         </div>
 
         {/* Action Controls & Cluster Metric */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Pods Enabled Toggle Button */}
+          <button
+            type="button"
+            onClick={handleTogglePodsConfig}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-mono font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              podsEnabled
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+                : "bg-[#18181c] border-[#27272a] text-[#a1a1aa] hover:border-[#3f3f46] hover:text-[#f4f4f5]"
+            }`}
+            title="Click to enable/disable Pods discovery on your local network"
+          >
+            <div className={`w-2.5 h-2.5 rounded-full ${podsEnabled ? "bg-emerald-400 animate-pulse" : "bg-[#52525b]"}`} />
+            <span>{podsEnabled ? "Pods Sharing: ENABLED" : "Pods Sharing: DISABLED"}</span>
+          </button>
+
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a] text-xs font-mono">
             <Zap className="w-3.5 h-3.5 text-[#a1a1aa]" />
             <span className="text-[#a1a1aa] font-medium font-sans">Pooled Memory:</span>
@@ -193,8 +237,8 @@ export function PodsPage() {
           <button
             type="button"
             onClick={handleRescanNetwork}
-            disabled={rescanning}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#18181c] hover:bg-[#222226] border border-[#27272a] text-xs font-bold text-[#f4f4f5] transition-all cursor-pointer"
+            disabled={rescanning || !podsEnabled}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#18181c] hover:bg-[#222226] border border-[#27272a] text-xs font-bold text-[#f4f4f5] transition-all cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-[#a1a1aa] ${rescanning ? "animate-spin" : ""}`} /> Rescan LAN
           </button>
@@ -202,12 +246,32 @@ export function PodsPage() {
           <button
             type="button"
             onClick={() => setShowPeerModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#27272a] hover:bg-[#3f3f46] text-white text-xs font-bold transition-all border border-[#3f3f46] cursor-pointer"
+            disabled={!podsEnabled}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#27272a] hover:bg-[#3f3f46] text-white text-xs font-bold transition-all border border-[#3f3f46] cursor-pointer disabled:opacity-50"
           >
             <Plus className="w-3.5 h-3.5" /> Connect IP Peer
           </button>
         </div>
       </div>
+
+      {/* Pods Disabled Banner */}
+      {!podsEnabled && (
+        <div className="bg-[#18181c] border-b border-amber-500/30 px-4 py-2.5 flex items-center justify-between text-xs text-amber-200/90 shrink-0">
+          <div className="flex items-center gap-2">
+            <Server className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              🔒 <strong>Exo P2P Pods Sharing is DISABLED by default.</strong> Enable Pods sharing to allow other computers on your network to discover this device and share VRAM.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleTogglePodsConfig}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded-lg text-xs transition-colors shrink-0 cursor-pointer"
+          >
+            Enable Pods Sharing
+          </button>
+        </div>
+      )}
 
       {/* Standby Banner if no model hosted */}
       {!isExoHosted && (
