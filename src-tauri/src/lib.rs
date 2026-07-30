@@ -20,25 +20,37 @@ pub fn run() {
                     Ok(sidecar_cmd) => match sidecar_cmd.args(["--port", "14321"]).spawn() {
                         Ok(res) => Ok(res),
                         Err(_) => {
+                            let curr_dir = std::env::current_dir().unwrap_or_default();
+                            let p1 = curr_dir.join("backend-sidecar").join("main.py");
+                            let p2 = curr_dir.join("src-tauri").join("..").join("backend-sidecar").join("main.py");
                             let resource_path = app.path().resource_dir().unwrap_or_default();
-                            let sidecar_script = std::env::current_dir()
-                                .unwrap_or_default()
-                                .parent()
-                                .map(|p| p.join("backend-sidecar").join("main.py"))
-                                .unwrap_or_else(|| resource_path.join("backend-sidecar").join("main.py"));
-                            let script_path = sidecar_script.to_string_lossy().to_string();
+
+                            let script_path = if p1.exists() {
+                                p1.to_string_lossy().to_string()
+                            } else if p2.exists() {
+                                p2.to_string_lossy().to_string()
+                            } else {
+                                resource_path.join("backend-sidecar").join("main.py").to_string_lossy().to_string()
+                            };
+
                             println!("[m0x-flow] Dev mode: Launching python sidecar script {}", script_path);
                             shell.command("python").args([&script_path, "--port", "14321"]).spawn()
                         }
                     },
                     Err(_) => {
+                        let curr_dir = std::env::current_dir().unwrap_or_default();
+                        let p1 = curr_dir.join("backend-sidecar").join("main.py");
+                        let p2 = curr_dir.join("src-tauri").join("..").join("backend-sidecar").join("main.py");
                         let resource_path = app.path().resource_dir().unwrap_or_default();
-                        let sidecar_script = std::env::current_dir()
-                            .unwrap_or_default()
-                            .parent()
-                            .map(|p| p.join("backend-sidecar").join("main.py"))
-                            .unwrap_or_else(|| resource_path.join("backend-sidecar").join("main.py"));
-                        let script_path = sidecar_script.to_string_lossy().to_string();
+
+                        let script_path = if p1.exists() {
+                            p1.to_string_lossy().to_string()
+                        } else if p2.exists() {
+                            p2.to_string_lossy().to_string()
+                        } else {
+                            resource_path.join("backend-sidecar").join("main.py").to_string_lossy().to_string()
+                        };
+
                         println!("[m0x-flow] Dev mode: Launching python sidecar script {}", script_path);
                         shell.command("python").args([&script_path, "--port", "14321"]).spawn()
                     }
