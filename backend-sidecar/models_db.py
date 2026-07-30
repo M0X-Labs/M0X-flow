@@ -2,6 +2,21 @@
 
 CURATED_DEFAULT_MODELS = [
     {
+        "id": "unsloth/Kimi-K3-GGUF",
+        "name": "Kimi K3 GGUF (2.8T MoE)",
+        "repo": "unsloth/Kimi-K3-GGUF",
+        "parameter_size": "2.8T MoE (2.8 Trillion)",
+        "real_size_gb": "49.2 GB",
+        "likes": 203,
+        "downloads": 12178,
+        "weight_format": "GGUF",
+        "bit_precision": "4-bit (UD-Q4_K_XL)",
+        "available_quantizations": ["UD-IQ1_M", "UD-IQ2_M", "UD-IQ2_XXS", "UD-IQ3_S", "UD-IQ4_XS", "UD-Q4_K_M", "UD-Q4_K_XL", "UD-Q8_K_XL"],
+        "license": "Kimi K3 License",
+        "context_window": "1M Tokens",
+        "tags": ["kimi", "kimi-k3", "2.8t", "moe", "unsloth", "gguf", "text-generation", "multimodal", "vision"],
+    },
+    {
         "id": "unsloth/Kimi-K2.7-Code-GGUF",
         "name": "Kimi K2.7 Code GGUF (1T MoE)",
         "repo": "unsloth/Kimi-K2.7-Code-GGUF",

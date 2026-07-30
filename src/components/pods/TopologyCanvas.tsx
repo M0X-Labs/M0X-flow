@@ -19,18 +19,24 @@ interface TopologyCanvasProps {
 }
 
 // Custom Host Node Component
-function HostNodeComponent({ data }: { data: { label: string; specs: string; memory: string } }) {
+function HostNodeComponent({ data }: { data: { label: string; specs: string; memory: string; selected?: boolean } }) {
   return (
-    <div className="px-4 py-3 rounded-xl bg-[#121215] border border-[#3f3f46] text-left min-w-[200px] cursor-pointer">
-      <Handle type="source" position={Position.Bottom} className="!bg-[#f4f4f5] !w-3 !h-3 !border-2 !border-[#09090b]" />
-      <Handle type="target" position={Position.Top} className="!bg-[#f4f4f5] !w-3 !h-3 !border-2 !border-[#09090b]" />
+    <div
+      className={`px-4 py-3 rounded-xl bg-[#121215] border text-left min-w-[210px] cursor-pointer transition-all duration-200 ${
+        data.selected
+          ? "border-emerald-500 shadow-lg shadow-emerald-500/10 ring-2 ring-emerald-500/40 scale-105"
+          : "border-[#3f3f46] hover:border-[#71717a]"
+      }`}
+    >
+      <Handle type="source" position={Position.Bottom} className="!bg-[#10b981] !w-3 !h-3 !border-2 !border-[#09090b]" />
+      <Handle type="target" position={Position.Top} className="!bg-[#10b981] !w-3 !h-3 !border-2 !border-[#09090b]" />
       <div className="flex items-center gap-2 mb-1.5">
-        <div className="w-6 h-6 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5]">
-          <Cpu className="w-3.5 h-3.5" />
+        <div className="w-6.5 h-6.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+          <Cpu className="w-4 h-4" />
         </div>
         <div>
           <span className="text-xs font-bold text-[#f4f4f5] block leading-tight">{data.label}</span>
-          <span className="text-[9px] font-mono text-[#a1a1aa] uppercase font-bold tracking-wider">PRIMARY HOST</span>
+          <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold tracking-wider">PRIMARY HOST</span>
         </div>
       </div>
       <div className="text-[11px] font-mono text-[#f4f4f5] font-bold mt-1">{data.specs}</div>
@@ -40,9 +46,15 @@ function HostNodeComponent({ data }: { data: { label: string; specs: string; mem
 }
 
 // Custom P2P Node Component
-function PeerNodeComponent({ data }: { data: { label: string; specs: string; memory: string; ping: number } }) {
+function PeerNodeComponent({ data }: { data: { label: string; specs: string; memory: string; ping: number; selected?: boolean } }) {
   return (
-    <div className="px-4 py-3 rounded-xl bg-[#121215] border border-[#27272a] hover:border-[#3f3f46] text-left min-w-[190px] cursor-pointer transition-all">
+    <div
+      className={`px-4 py-3 rounded-xl bg-[#121215] border text-left min-w-[195px] cursor-pointer transition-all duration-200 ${
+        data.selected
+          ? "border-emerald-500 shadow-lg shadow-emerald-500/10 ring-2 ring-emerald-500/40 scale-105"
+          : "border-[#27272a] hover:border-[#3f3f46]"
+      }`}
+    >
       <Handle type="target" position={Position.Top} className="!bg-[#a1a1aa] !w-3 !h-3 !border-2 !border-[#09090b]" />
       <Handle type="source" position={Position.Bottom} className="!bg-[#a1a1aa] !w-3 !h-3 !border-2 !border-[#09090b]" />
       <div className="flex items-center justify-between mb-1.5">
@@ -70,22 +82,25 @@ const nodeTypes = {
 /**
  * TopologyCanvas — Interactive Node graph visualizer for the P2P Exo cluster using React Flow.
  */
-export function TopologyCanvas({ nodes, onSelectNode }: TopologyCanvasProps) {
+export function TopologyCanvas({ nodes, selectedNodeId, onSelectNode }: TopologyCanvasProps) {
   // Convert NodeInfo to ReactFlow Nodes & Edges
   const flowNodes: Node[] = useMemo(() => {
     const peerNodes = nodes.filter((n) => !n.isHost);
     return nodes.map((node) => {
       const isHost = node.isHost;
+      const isSelected = selectedNodeId === node.id;
+
       if (isHost) {
         return {
           id: node.id,
           type: "hostNode",
-          position: { x: 320, y: 120 },
+          position: { x: 320, y: 100 },
           data: {
             label: node.hostname,
             specs: node.deviceType,
             memory: `${node.allocatedMemory}/${node.totalMemory}`,
             ping: node.latencyMs,
+            selected: isSelected,
             rawNode: node,
           },
         };
@@ -96,10 +111,10 @@ export function TopologyCanvas({ nodes, onSelectNode }: TopologyCanvasProps) {
       const spread = Math.PI * 0.8;
       const startAngle = Math.PI * 0.1;
       const angle = totalPeers === 1 ? Math.PI * 0.5 : startAngle + (peerIndex / (totalPeers - 1)) * spread;
-      const radius = 220;
+      const radius = 240;
 
       const x = 320 + Math.cos(angle) * radius;
-      const y = 120 + Math.sin(angle) * radius + 100;
+      const y = 100 + Math.sin(angle) * radius + 110;
 
       return {
         id: node.id,
@@ -110,11 +125,12 @@ export function TopologyCanvas({ nodes, onSelectNode }: TopologyCanvasProps) {
           specs: node.deviceType,
           memory: `${node.allocatedMemory}/${node.totalMemory}`,
           ping: node.latencyMs,
+          selected: isSelected,
           rawNode: node,
         },
       };
     });
-  }, [nodes]);
+  }, [nodes, selectedNodeId]);
 
   const flowEdges: Edge[] = useMemo(() => {
     const hostNode = nodes.find((n) => n.isHost);
@@ -127,7 +143,7 @@ export function TopologyCanvas({ nodes, onSelectNode }: TopologyCanvasProps) {
         source: hostNode.id,
         target: peer.id,
         animated: true,
-        style: { stroke: "#3f3f46", strokeWidth: 2 },
+        style: { stroke: "#10b981", strokeWidth: 2, strokeDasharray: "5,5" },
       }));
   }, [nodes]);
 
@@ -150,5 +166,6 @@ export function TopologyCanvas({ nodes, onSelectNode }: TopologyCanvasProps) {
     </div>
   );
 }
+
 
 

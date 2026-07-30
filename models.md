@@ -10,7 +10,25 @@ This document provides a detailed 1-by-1 breakdown of all open-weight model repo
 
 ## 📋 Detailed 1-by-1 Model Catalog & Real Quantization Sizes
 
-### 1. `unsloth/Kimi-K2.7-Code-GGUF`
+### 1. `unsloth/Kimi-K3-GGUF`
+- **Real Parameters**: 2.8 Trillion (2.8T MoE Architecture)
+- **Format**: GGUF
+- **Total Repo Weight**: 10.9 Terabytes
+- **Real Quantization Sub-Folders & Disk Sizes**:
+  - `UD-IQ1_M`: 38.0 GB
+  - `UD-IQ2_M`: 52.0 GB
+  - `UD-IQ2_XXS`: 49.0 GB
+  - `UD-IQ3_S`: 65.0 GB
+  - `UD-IQ4_XS`: 49.2 GB (Recommended)
+  - `UD-Q4_K_M`: 49.0 GB
+  - `UD-Q4_K_XL`: 49.2 GB
+  - `UD-Q8_K_XL`: 99.0 GB
+- **Engine Compatibility**: Standard ❌ | AirLLM ✅ | Exo Pods ✅
+- **Min VRAM**: ~24 GB (AirLLM / Pods)
+- **Key Features**: Native multimodal (text, image, video), 1M token context window, 896 experts activated 16 at a time
+- **Tags**: kimi, kimi-k3, 2.8t, moe, unsloth, gguf, multimodal, vision
+
+### 2. `unsloth/Kimi-K2.7-Code-GGUF`
 - **Real Parameters**: 1 Trillion (1T MoE Architecture)
 - **Format**: GGUF
 - **Total Repo Weight**: 4.3 Terabytes

@@ -57,13 +57,29 @@ export function NodeStatsCard({ node }: NodeStatsCardProps) {
           <span className="text-[#f4f4f5] font-bold truncate max-w-[150px] text-right">{node.deviceType}</span>
         </div>
 
-        <div className="flex justify-between items-center">
-          <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">
-            <Network className="w-3.5 h-3.5 text-[#71717a]" /> VRAM Contributed
-          </span>
-          <span className="font-mono text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
-            {node.allocatedMemory} / {node.totalMemory}
-          </span>
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">
+              <Network className="w-3.5 h-3.5 text-[#71717a]" /> VRAM Contributed
+            </span>
+            <span className="font-mono text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
+              {node.allocatedMemory} / {node.totalMemory}
+            </span>
+          </div>
+          {/* Memory Progress Bar */}
+          {(() => {
+            const alloc = parseFloat(node.allocatedMemory) || 0;
+            const total = parseFloat(node.totalMemory) || 16;
+            const pct = Math.min(100, Math.max(0, (alloc / total) * 100));
+            return (
+              <div className="w-full bg-[#18181c] border border-[#27272a] h-1.5 rounded-full overflow-hidden mt-1.5">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-300 rounded-full"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            );
+          })()}
         </div>
 
         <div className="flex justify-between items-center">

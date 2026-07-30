@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -586,6 +587,10 @@ async def get_pods_config():
 
 class PodsConfigRequest(BaseModel):
     pods_enabled: bool
+
+
+class ConnectPeerRequest(BaseModel):
+    ip_address: str
 
 
 @app.post("/api/pods/config")
