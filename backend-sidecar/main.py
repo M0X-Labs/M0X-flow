@@ -15,6 +15,13 @@ import shutil
 import urllib.request
 import json
 import threading
+import socket
+import time
+import psutil
+import re
+import subprocess
+import asyncio
+import concurrent.futures
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -742,24 +749,6 @@ def verify_m0x_peer(ip: str, port: int = 14321):
         except Exception:
             pass
 
-    # Socket connection fallback: check if TCP port 14321 is open
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        res = s.connect_ex((ip, port))
-        s.close()
-        if res == 0:
-            hostname = f"LAN Peer ({ip})"
-            return {
-                "ip": ip,
-                "hostname": hostname,
-                "deviceType": "m0x-flow Connected Peer",
-                "totalMemory": "16.0 GB VRAM",
-                "ramSize": "32.0 GB RAM",
-            }
-    except Exception:
-        pass
-
     return None
 
 
@@ -855,14 +844,15 @@ def udp_broadcast_probe():
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(0.3)
         sock.sendto(b"m0x-pods-discovery", ("<broadcast>", 14321))
+        sock.sendto(b"m0x-pods-discovery", ("255.255.255.255", 14321))
         t0 = time.time()
-        while time.time() - t0 < 0.3:
+        while time.time() - t0 < 0.6:
             try:
                 data, addr = sock.recvfrom(1024)
-                if addr and addr[0]:
+                if addr and addr[0] and data == b"m0x-pods-ack":
                     found_ips.add(addr[0])
             except socket.timeout:
-                break
+                pass
             except Exception:
                 pass
         sock.close()
@@ -951,11 +941,11 @@ def scan_real_lan_devices(full_sweep=False):
     # Software probe across active candidate IPs
     verified_peers = []
     if active_candidates:
-        with ThreadPoolExecutor(max_workers=min(40, len(active_candidates))) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(40, len(active_candidates))) as executor:
             future_to_ip = {executor.submit(verify_m0x_peer, ip): ip for ip in active_candidates}
-            for future in future_to_ip:
+            for future in concurrent.futures.as_completed(future_to_ip, timeout=4.0):
                 try:
-                    res = future.result(timeout=3)
+                    res = future.result()
                     if res is not None:
                         verified_peers.append(res)
                 except Exception:
@@ -1003,20 +993,18 @@ def scan_real_lan_devices(full_sweep=False):
         ip = p.get("ipAddress", "")
         if ip and ip != host_ip and not any(d.get("ipAddress") == ip for d in discovered):
             lat = measure_ping_latency(ip)
-            layers = f"Layers {25 + (idx - 1)*25}-{50 + (idx - 1)*25}" if is_hosted else "Standby (No Model Hosted)"
-            vram_alloc = "4.0 GB" if is_hosted else "0.0 GB"
             discovered.append({
                 "id": f"peer-node-{idx}",
                 "hostname": p.get("hostname", f"Peer Device ({ip})"),
-                "deviceType": p.get("deviceType", "m0x LAN Peer Node"),
-                "allocatedMemory": vram_alloc,
-                "totalMemory": p.get("totalMemory", "16.0 GB VRAM"),
-                "ramSize": p.get("ramSize", "32.0 GB RAM"),
+                "deviceType": p.get("deviceType", "Unknown GPU"),
+                "allocatedMemory": "0.0 GB",
+                "totalMemory": p.get("totalMemory", "Unknown VRAM"),
+                "ramSize": p.get("ramSize", "Unknown RAM"),
                 "latencyMs": lat,
                 "ipAddress": ip,
                 "isHost": False,
-                "assignedLayers": layers,
-                "status": "active font-mono" if is_hosted else "rebalancing",
+                "assignedLayers": "Standby (No Model Hosted)",
+                "status": "offline",
             })
             idx += 1
 
@@ -1052,7 +1040,7 @@ async def rescan_pods_nodes():
         return {"status": "disabled", "nodes": [host_node], "count": 1, "pods_enabled": False}
 
     # Full sweep on explicit rescan
-    peers = scan_real_lan_devices(full_sweep=True)
+    peers = await asyncio.to_thread(scan_real_lan_devices, True)
     return {"status": "rescanned", "nodes": [host_node] + peers, "count": 1 + len(peers), "pods_enabled": True}
 
 
@@ -1095,7 +1083,7 @@ async def connect_ip_peer(req: ConnectPeerRequest):
         save_peers_to_config()
 
     # Trigger async rescan so peer is cached
-    scan_real_lan_devices()
+    threading.Thread(target=scan_real_lan_devices, daemon=True).start()
 
     return {"status": "connected", "peer": new_peer}
 
@@ -1119,6 +1107,20 @@ def ensure_windows_firewall_rule():
 
 def start_background_lan_scanner():
     """Pre-warm hardware specs and run background LAN discovery loop so API responses are instant."""
+    def udp_listener():
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", 14321))
+            while True:
+                data, addr = sock.recvfrom(1024)
+                if data == b"m0x-pods-discovery":
+                    sock.sendto(b"m0x-pods-ack", addr)
+        except Exception:
+            pass
+
+    threading.Thread(target=udp_listener, daemon=True).start()
+
     def loop():
         # Pre-warm GPU/VRAM/RAM specs on startup
         try:
