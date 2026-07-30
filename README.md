@@ -149,7 +149,7 @@ GitHub Actions will build the app and upload the `.exe` setup installer, `.msi` 
 
 ```text
 m0x-flow/
-├── backend-sidecar/      # Python FastAPI orchestrator & inference engines
+├── backend-sidecar/      # Python FastAPI orchestrator & inference engines 
 │   ├── engines/          # AirLLM and Exo process wrappers
 │   ├── main.py           # Sidecar API endpoints & SSE streaming handler
 │   └── requirements.txt  # Python sidecar dependencies
