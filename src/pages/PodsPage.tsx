@@ -49,7 +49,7 @@ function PodsSkeletonCanvas() {
 
         <div className="flex items-center gap-2 text-xs font-mono text-[#a1a1aa] bg-[#121215] px-4 py-2 rounded-xl border border-[#27272a]">
           <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
-          <span>Probing real hardware specs & local LAN devices...</span>
+          <span>Detecting real GPU & system hardware metrics...</span>
         </div>
       </div>
     </div>
@@ -80,7 +80,7 @@ export function PodsPage() {
       const res = await fetch("http://localhost:14321/api/pods/nodes").catch(() => null);
       if (res && res.ok) {
         const data = await res.json();
-        if (data.nodes && Array.isArray(data.nodes)) {
+        if (data.nodes && Array.isArray(data.nodes) && data.nodes.length > 0) {
           setRealNodes(data.nodes);
         }
         if (typeof data.pods_enabled === "boolean") {
@@ -89,7 +89,7 @@ export function PodsPage() {
         }
       }
     } catch {
-      // fallback
+      // keep
     } finally {
       setLoading(false);
     }
@@ -118,7 +118,7 @@ export function PodsPage() {
       const res = await fetch("http://localhost:14321/api/pods/rescan", { method: "POST" }).catch(() => null);
       if (res && res.ok) {
         const data = await res.json();
-        if (data.nodes && Array.isArray(data.nodes)) {
+        if (data.nodes && Array.isArray(data.nodes) && data.nodes.length > 0) {
           setRealNodes(data.nodes);
         }
         if (typeof data.pods_enabled === "boolean") {
@@ -326,7 +326,6 @@ export function PodsPage() {
           <PodsSkeletonCanvas />
         ) : (
           <>
-            {/* React Flow Topology Canvas */}
             <TopologyCanvas
               nodes={displayNodes}
               selectedNodeId={currentSelectedNode?.id}

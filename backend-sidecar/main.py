@@ -14,6 +14,7 @@ import sys
 import shutil
 import urllib.request
 import json
+import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -600,8 +601,14 @@ async def update_pods_config(req: PodsConfigRequest):
     return {"status": "success", "pods_enabled": req.pods_enabled}
 
 
+HARDWARE_SPECS_CACHE = None
+
 def get_real_hardware_specs():
-    """Detect real GPU Model Name, exact VRAM size (GB), and System RAM size (GB)."""
+    """Detect real GPU Model Name, exact VRAM size (GB), and System RAM size (GB) with fast in-memory caching."""
+    global HARDWARE_SPECS_CACHE
+    if HARDWARE_SPECS_CACHE is not None:
+        return HARDWARE_SPECS_CACHE
+
     gpu_name = "Host GPU Device"
     vram_gb = 16.0
     ram_gb = 32.0
@@ -618,13 +625,14 @@ def get_real_hardware_specs():
                     ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
                     capture_output=True,
                     text=True,
-                    timeout=2,
+                    timeout=1.5,
                 )
                 if smi.stdout and "," in smi.stdout:
                     parts = smi.stdout.strip().split(",")
                     gpu_name = parts[0].strip()
                     vram_gb = round(float(parts[1].strip()) / 1024.0, 1)
-                    return gpu_name, f"{vram_gb:.1f} GB VRAM", f"{ram_gb:.1f} GB RAM"
+                    HARDWARE_SPECS_CACHE = (gpu_name, f"{vram_gb:.1f} GB VRAM", f"{ram_gb:.1f} GB RAM")
+                    return HARDWARE_SPECS_CACHE
             except Exception:
                 pass
 
@@ -632,7 +640,7 @@ def get_real_hardware_specs():
                 ["powershell", "-Command", "Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM | ConvertTo-Json"],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=2.0,
             )
             if ps.stdout:
                 data = json.loads(ps.stdout)
@@ -656,7 +664,7 @@ def get_real_hardware_specs():
                                 vram_gb = vram
         elif sys.platform == "darwin":
             try:
-                res = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, timeout=2)
+                res = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, timeout=1.5)
                 if res.stdout and "Apple" in res.stdout:
                     gpu_name = res.stdout.strip()
                     vram_gb = ram_gb
@@ -664,7 +672,7 @@ def get_real_hardware_specs():
                 pass
         else:
             try:
-                res = subprocess.run(["lspci"], capture_output=True, text=True, timeout=2)
+                res = subprocess.run(["lspci"], capture_output=True, text=True, timeout=1.5)
                 if res.stdout:
                     for line in res.stdout.splitlines():
                         if "VGA" in line or "3D" in line:
@@ -675,7 +683,8 @@ def get_real_hardware_specs():
     except Exception:
         pass
 
-    return gpu_name, f"{vram_gb:.1f} GB VRAM", f"{ram_gb:.1f} GB RAM"
+    HARDWARE_SPECS_CACHE = (gpu_name, f"{vram_gb:.1f} GB VRAM", f"{ram_gb:.1f} GB RAM")
+    return HARDWARE_SPECS_CACHE
 
 
 @app.get("/api/pods/handshake")
@@ -710,7 +719,7 @@ def verify_m0x_peer(ip: str, port: int = 14321):
                 url,
                 headers={"User-Agent": "m0x-flow-peer-probe", "Accept": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
+            with urllib.request.urlopen(req, timeout=1.2) as resp:
                 if resp.status == 200:
                     try:
                         data = json.loads(resp.read().decode("utf-8"))
@@ -737,7 +746,7 @@ def verify_m0x_peer(ip: str, port: int = 14321):
     # Socket connection fallback: check if TCP port 14321 is open
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.6)
+        s.settimeout(0.5)
         res = s.connect_ex((ip, port))
         s.close()
         if res == 0:
@@ -794,7 +803,7 @@ def measure_ping_latency(ip_str: str) -> float:
     t0 = time.time()
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
+        s.settimeout(0.4)
         s.connect((clean_ip, 14321))
         s.close()
         return round((time.time() - t0) * 1000, 1)
@@ -824,10 +833,10 @@ def udp_broadcast_probe():
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(0.4)
+        sock.settimeout(0.3)
         sock.sendto(b"m0x-pods-discovery", ("<broadcast>", 14321))
         t0 = time.time()
-        while time.time() - t0 < 0.4:
+        while time.time() - t0 < 0.3:
             try:
                 data, addr = sock.recvfrom(1024)
                 if addr and addr[0]:
@@ -842,8 +851,12 @@ def udp_broadcast_probe():
     return found_ips
 
 
+CACHED_LAN_PEERS: List[dict] = []
+
+
 def scan_real_lan_devices():
     """Scan local network and filter ONLY computers running m0x-flow software with Pods enabled."""
+    global CACHED_LAN_PEERS
     load_saved_peers()
     discovered = []
 
@@ -866,7 +879,7 @@ def scan_real_lan_devices():
 
     # 2. Read ARP table entries
     try:
-        res = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=3)
+        res = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=2)
         if res.stdout:
             ips = re.findall(r"\b(?:192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)\b", res.stdout)
             for ip in ips:
@@ -881,7 +894,7 @@ def scan_real_lan_devices():
         if ip and ip != host_ip and not is_network_gateway(ip):
             candidate_ips.add(ip)
 
-    # 4. Sweep full /24 subnets across all network adapters (Ethernet, Wi-Fi, etc.)
+    # 4. Sweep full /24 subnets across active network adapters
     prefixes = get_all_local_subnet_prefixes()
     for prefix in prefixes:
         for num in range(2, 255):
@@ -889,11 +902,30 @@ def scan_real_lan_devices():
             if ip != host_ip and not is_network_gateway(ip):
                 candidate_ips.add(ip)
 
-    # Parallel software probe across candidate IPs
-    verified_peers = []
+    # Fast TCP pre-check filter to eliminate unreachable IP delays
+    def fast_ping_check(ip):
+        if any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
+            return ip
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.12)
+            res = s.connect_ex((ip, 14321))
+            s.close()
+            return ip if res == 0 else None
+        except Exception:
+            return None
+
+    active_candidates = set()
     if candidate_ips:
-        with ThreadPoolExecutor(max_workers=min(75, len(candidate_ips))) as executor:
-            future_to_ip = {executor.submit(verify_m0x_peer, ip): ip for ip in candidate_ips}
+        with ThreadPoolExecutor(max_workers=min(80, len(candidate_ips))) as executor:
+            res_ips = list(executor.map(fast_ping_check, candidate_ips))
+            active_candidates = {ip for ip in res_ips if ip}
+
+    # Software probe across active candidate IPs
+    verified_peers = []
+    if active_candidates:
+        with ThreadPoolExecutor(max_workers=min(40, len(active_candidates))) as executor:
+            future_to_ip = {executor.submit(verify_m0x_peer, ip): ip for ip in active_candidates}
             for future in future_to_ip:
                 try:
                     res = future.result()
@@ -947,19 +979,19 @@ def scan_real_lan_devices():
             })
             idx += 1
 
+    CACHED_LAN_PEERS = discovered
     return discovered
 
 
 @app.get("/api/pods/nodes")
 async def get_pods_nodes():
-    """Return real discovered host machine and active LAN network devices running m0x-flow Pods."""
+    """Return real discovered host machine and active LAN network devices instantly (0ms)."""
     host_node = get_real_host_node()
     enabled = get_pods_enabled()
     if not enabled:
         return {"nodes": [host_node], "count": 1, "pods_enabled": False}
 
-    peers = scan_real_lan_devices()
-    return {"nodes": [host_node] + peers, "count": 1 + len(peers), "pods_enabled": True}
+    return {"nodes": [host_node] + CACHED_LAN_PEERS, "count": 1 + len(CACHED_LAN_PEERS), "pods_enabled": True}
 
 
 @app.post("/api/pods/rescan")
@@ -1023,11 +1055,57 @@ async def connect_ip_peer(req: ConnectPeerRequest):
         MANUAL_PEERS.append(new_peer)
         save_peers_to_config()
 
+    # Trigger async rescan so peer is cached
+    scan_real_lan_devices()
+
     return {"status": "connected", "peer": new_peer}
 
 
+def ensure_windows_firewall_rule():
+    """Ensure Windows Firewall allows inbound connections on TCP port 14321 for m0x-flow P2P Pods."""
+    if sys.platform == "win32":
+        try:
+            check = subprocess.run(
+                'netsh advfirewall firewall show rule name="m0x-flow Pods P2P"',
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            if "No rules match" in check.stdout or not check.stdout:
+                cmd = 'netsh advfirewall firewall add rule name="m0x-flow Pods P2P" dir=in action=allow protocol=TCP localport=14321'
+                subprocess.run(cmd, shell=True, capture_output=True)
+        except Exception:
+            pass
 
 
+def start_background_lan_scanner():
+    """Pre-warm hardware specs and run background LAN discovery loop so API responses are instant."""
+    def loop():
+        # Pre-warm GPU/VRAM/RAM specs on startup
+        try:
+            get_real_hardware_specs()
+        except Exception:
+            pass
+
+        time.sleep(0.5)
+
+        # Initial sweep
+        try:
+            scan_real_lan_devices()
+        except Exception:
+            pass
+
+        # Periodic background refresh loop
+        while True:
+            try:
+                time.sleep(10)
+                if get_pods_enabled():
+                    scan_real_lan_devices()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
 
 
 def free_port(port: int):
@@ -1066,6 +1144,8 @@ def main():
     args = parser.parse_args()
 
     free_port(args.port)
+    ensure_windows_firewall_rule()
+    start_background_lan_scanner()
 
     import uvicorn
 
