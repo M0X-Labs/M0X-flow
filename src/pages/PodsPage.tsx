@@ -77,7 +77,12 @@ export function PodsPage() {
   // Fetch real LAN devices from backend sidecar API
   const fetchRealLanNodes = useCallback(async () => {
     try {
-      const res = await fetch("http://localhost:14321/api/pods/nodes").catch(() => null);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch("http://localhost:14321/api/pods/nodes", {
+        signal: controller.signal,
+      }).catch(() => null);
+      clearTimeout(timeoutId);
       if (res && res.ok) {
         const data = await res.json();
         if (data.nodes && Array.isArray(data.nodes) && data.nodes.length > 0) {

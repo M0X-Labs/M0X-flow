@@ -223,7 +223,7 @@ async def health_check():
         "status": "ok",
         "engine": "m0x-flow-sidecar",
         "version": "0.1.0",
-        "pods_enabled": True,
+        "pods_enabled": get_pods_enabled(),
         "models_dir": str(curr),
         "hostname": hostname,
         "deviceType": gpu_name,
@@ -507,26 +507,46 @@ MANUAL_PEERS = []
 
 
 def load_saved_peers():
-    """Load persisted custom LAN peers from config.json."""
+    """Load persisted custom LAN peers from config.json with full metadata."""
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if "peers" in data and isinstance(data["peers"], list):
+                # Support new format: list of dicts with full peer data
+                if "pods_peers" in data and isinstance(data["pods_peers"], list):
+                    for peer_data in data["pods_peers"]:
+                        if isinstance(peer_data, dict):
+                            ip = peer_data.get("ipAddress", "")
+                            if ip and not any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
+                                MANUAL_PEERS.append(peer_data)
+                # Legacy fallback: list of IP strings
+                elif "peers" in data and isinstance(data["peers"], list):
                     for ip in data["peers"]:
-                        if ip and not any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
+                        if isinstance(ip, str) and ip and not any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
                             MANUAL_PEERS.append({"ipAddress": ip})
         except Exception:
             pass
 
 
 def save_peers_to_config():
-    """Save manual peers list to config.json."""
+    """Save manual peers list to config.json with full metadata."""
     try:
         data = {}
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+        # Save full peer data (hostname, deviceType, totalMemory, ramSize, ipAddress)
+        data["pods_peers"] = [
+            {
+                "ipAddress": p.get("ipAddress", ""),
+                "hostname": p.get("hostname", ""),
+                "deviceType": p.get("deviceType", ""),
+                "totalMemory": p.get("totalMemory", ""),
+                "ramSize": p.get("ramSize", ""),
+            }
+            for p in MANUAL_PEERS if p.get("ipAddress")
+        ]
+        # Keep legacy key for backward compat
         data["peers"] = [p.get("ipAddress") for p in MANUAL_PEERS if p.get("ipAddress")]
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -860,8 +880,13 @@ def is_network_gateway(ip: str) -> bool:
     return ip.endswith(".1") or ip.endswith(".255") or ip == "0.0.0.0" or ip == "127.0.0.1"
 
 
-def scan_real_lan_devices():
-    """Scan local network and filter ONLY computers running m0x-flow software with Pods enabled."""
+def scan_real_lan_devices(full_sweep=False):
+    """Scan local network and filter ONLY computers running m0x-flow software with Pods enabled.
+    
+    Args:
+        full_sweep: If True, does a full /24 subnet sweep. If False (default for background scan),
+                    only re-verifies known/manual peers and ARP table entries for speed.
+    """
     global CACHED_LAN_PEERS
     load_saved_peers()
     discovered = []
@@ -871,10 +896,13 @@ def scan_real_lan_devices():
     candidate_ips = set()
 
     # 1. Broad UDP beacon responses
-    udp_ips = udp_broadcast_probe()
-    for ip in udp_ips:
-        if ip != host_ip and not is_network_gateway(ip):
-            candidate_ips.add(ip)
+    try:
+        udp_ips = udp_broadcast_probe()
+        for ip in udp_ips:
+            if ip != host_ip and not is_network_gateway(ip):
+                candidate_ips.add(ip)
+    except Exception:
+        pass
 
     # 2. Read ARP table entries
     try:
@@ -887,19 +915,20 @@ def scan_real_lan_devices():
     except Exception:
         pass
 
-    # 3. Include saved peers
+    # 3. Include saved/manual peers (always)
     for p in MANUAL_PEERS:
         ip = p.get("ipAddress", "")
         if ip and ip != host_ip and not is_network_gateway(ip):
             candidate_ips.add(ip)
 
-    # 4. Sweep full /24 subnets across active network adapters
-    prefixes = get_all_local_subnet_prefixes()
-    for prefix in prefixes:
-        for num in range(2, 255):
-            ip = f"{prefix}{num}"
-            if ip != host_ip and not is_network_gateway(ip):
-                candidate_ips.add(ip)
+    # 4. Only do full /24 sweep on explicit rescan, NOT on background refresh
+    if full_sweep:
+        prefixes = get_all_local_subnet_prefixes()
+        for prefix in prefixes:
+            for num in range(2, 255):
+                ip = f"{prefix}{num}"
+                if ip != host_ip and not is_network_gateway(ip):
+                    candidate_ips.add(ip)
 
     # Fast TCP pre-check filter with 0.35s timeout for Wi-Fi network reliability
     def fast_ping_check(ip):
@@ -927,16 +956,20 @@ def scan_real_lan_devices():
             future_to_ip = {executor.submit(verify_m0x_peer, ip): ip for ip in active_candidates}
             for future in future_to_ip:
                 try:
-                    res = future.result()
+                    res = future.result(timeout=3)
                     if res is not None:
                         verified_peers.append(res)
                 except Exception:
                     pass
 
+    # Track which manual peer IPs were verified (to update their saved metadata)
+    verified_ips = set()
+
     is_hosted = HOSTED_MODEL_STATE["is_hosted"]
     idx = 1
     for peer in verified_peers:
         ip = peer["ip"]
+        verified_ips.add(ip)
         lat = measure_ping_latency(ip)
         layers = f"Layers {25 + (idx - 1)*25}-{50 + (idx - 1)*25}" if is_hosted else "Standby (No Model Hosted)"
         vram_alloc = "4.0 GB" if is_hosted else "0.0 GB"
@@ -956,7 +989,17 @@ def scan_real_lan_devices():
         })
         idx += 1
 
+        # Update saved manual peer metadata if we got fresh info from handshake
+        for mp in MANUAL_PEERS:
+            if mp.get("ipAddress") == ip:
+                mp["hostname"] = peer["hostname"]
+                mp["deviceType"] = peer["deviceType"]
+                mp["totalMemory"] = peer["totalMemory"]
+                mp["ramSize"] = peer.get("ramSize", "32.0 GB RAM")
+                break
+
     # Ensure all manual peers saved by the user are always in discovered list
+    # even if they failed verification (temporarily unreachable)
     for p in MANUAL_PEERS:
         ip = p.get("ipAddress", "")
         if ip and ip != host_ip and not any(d.get("ipAddress") == ip for d in discovered):
@@ -979,6 +1022,14 @@ def scan_real_lan_devices():
             idx += 1
 
     CACHED_LAN_PEERS = discovered
+    
+    # Save updated peer metadata
+    if verified_ips:
+        try:
+            save_peers_to_config()
+        except Exception:
+            pass
+    
     return discovered
 
 
@@ -1001,7 +1052,8 @@ async def rescan_pods_nodes():
     if not enabled:
         return {"status": "disabled", "nodes": [host_node], "count": 1, "pods_enabled": False}
 
-    peers = scan_real_lan_devices()
+    # Full sweep on explicit rescan
+    peers = scan_real_lan_devices(full_sweep=True)
     return {"status": "rescanned", "nodes": [host_node] + peers, "count": 1 + len(peers), "pods_enabled": True}
 
 
@@ -1077,18 +1129,18 @@ def start_background_lan_scanner():
 
         time.sleep(0.5)
 
-        # Initial sweep
+        # Initial sweep (full) to discover peers on first startup
         try:
-            scan_real_lan_devices()
+            scan_real_lan_devices(full_sweep=True)
         except Exception:
             pass
 
-        # Periodic background refresh loop
+        # Periodic background refresh loop (fast: only re-verify known peers)
         while True:
             try:
                 time.sleep(10)
                 if get_pods_enabled():
-                    scan_real_lan_devices()
+                    scan_real_lan_devices(full_sweep=False)
             except Exception:
                 pass
 
