@@ -189,6 +189,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown hooks."""
     curr = get_current_models_dir()
     print(f"[m0x-sidecar] Backend sidecar starting... Models path: {curr}", flush=True)
+    try:
+        get_real_hardware_specs()
+    except Exception:
+        pass
     yield
     print(f"[m0x-sidecar] Backend sidecar shutting down...", flush=True)
 
@@ -406,25 +410,10 @@ def get_real_system_ram():
         return 32.0, 18.5
 
 
-def get_real_gpu_info():
-    """Detect real host GPU device model using PowerShell CIM / nvidia-smi."""
-    try:
-        res = subprocess.run(
-            ["powershell", "-Command", "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        if res.stdout:
-            lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-            for name in lines:
-                if "NVIDIA" in name or "GeForce" in name or "Radeon" in name or "RTX" in name:
-                    return name
-            if lines:
-                return lines[0]
-    except Exception:
-        pass
-    return "NVIDIA GeForce RTX 5080"
+def get_real_gpu_info() -> str:
+    """Detect real host GPU device model using cached hardware specs."""
+    gpu_name, _, _ = get_real_hardware_specs()
+    return gpu_name
 
 
 @app.get("/api/system/metrics")
@@ -774,27 +763,37 @@ def verify_m0x_peer(ip: str, port: int = 14321):
     return None
 
 
+LOCAL_IP_CACHE = None
+
 def get_local_ip() -> str:
-    """Retrieve actual LAN IP without relying solely on 8.8.8.8, falling back to 0.0.0.0"""
+    """Retrieve actual LAN IP without relying solely on 8.8.8.8, with caching to prevent socket blocking."""
+    global LOCAL_IP_CACHE
+    if LOCAL_IP_CACHE is not None:
+        return LOCAL_IP_CACHE
+
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.3)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip and not ip.startswith("127."):
+            LOCAL_IP_CACHE = ip
+            return LOCAL_IP_CACHE
     except Exception:
         pass
     
     try:
-        import psutil
         for iface, addrs in psutil.net_if_addrs().items():
             for addr in addrs:
                 if addr.family == socket.AF_INET and not addr.address.startswith("127.") and not addr.address.startswith("169.254."):
-                    return addr.address
+                    LOCAL_IP_CACHE = addr.address
+                    return LOCAL_IP_CACHE
     except Exception:
         pass
     
-    return "0.0.0.0"
+    LOCAL_IP_CACHE = "0.0.0.0"
+    return LOCAL_IP_CACHE
 
 def get_real_host_node():
     """Discover real local host device name, platform GPU/CPU info, LAN IP, VRAM and RAM specs."""
@@ -1129,9 +1128,9 @@ def start_background_lan_scanner():
 
         time.sleep(0.5)
 
-        # Initial sweep (full) to discover peers on first startup
+        # Initial fast sweep to discover saved/active peers instantly on startup
         try:
-            scan_real_lan_devices(full_sweep=True)
+            scan_real_lan_devices(full_sweep=False)
         except Exception:
             pass
 
@@ -1148,6 +1147,21 @@ def start_background_lan_scanner():
     t.start()
 
 
+def wait_port_free(port: int, max_wait: float = 3.0) -> bool:
+    """Check and wait until TCP port is completely unbound and available."""
+    t0 = time.time()
+    while time.time() - t0 < max_wait:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", port))
+            s.close()
+            return True
+        except Exception:
+            time.sleep(0.3)
+    return False
+
+
 def free_port(port: int):
     """If port is bound by a zombie sidecar process on Windows/Linux, kill it before binding."""
     try:
@@ -1156,18 +1170,24 @@ def free_port(port: int):
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if res.stdout:
                 my_pid = os.getpid()
+                killed = False
                 for line in res.stdout.splitlines():
                     if "LISTENING" in line:
                         parts = line.strip().split()
                         pid = parts[-1]
                         if pid.isdigit() and int(pid) != my_pid:
                             print(f"[m0x-sidecar] Freeing port {port}: killing zombie process PID {pid}...", flush=True)
-                            subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
-                            time.sleep(0.5)
+                            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, capture_output=True)
+                            killed = True
+                if killed:
+                    time.sleep(1.0)
         else:
             subprocess.run(f"fuser -k {port}/tcp", shell=True, capture_output=True)
+            time.sleep(0.5)
     except Exception as e:
         print(f"[m0x-sidecar] Warning freeing port {port}: {e}", flush=True)
+
+    wait_port_free(port)
 
 
 # ─── Entry Point ────────────────────────────────────────────────────────────

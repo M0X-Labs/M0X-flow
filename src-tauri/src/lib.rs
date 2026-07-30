@@ -16,47 +16,44 @@ pub fn run() {
         .setup(|app| {
             let shell = app.shell();
             let spawn_result = if cfg!(debug_assertions) {
-                match shell.sidecar("backend-sidecar") {
-                    Ok(sidecar_cmd) => match sidecar_cmd.args(["--port", "14321"]).spawn() {
-                        Ok(res) => Ok(res),
-                        Err(_) => {
-                            let curr_dir = std::env::current_dir().unwrap_or_default();
-                            let p1 = curr_dir.join("backend-sidecar").join("main.py");
-                            let p2 = curr_dir.join("src-tauri").join("..").join("backend-sidecar").join("main.py");
-                            let resource_path = app.path().resource_dir().unwrap_or_default();
+                let curr_dir = std::env::current_dir().unwrap_or_default();
+                let resource_path = app.path().resource_dir().unwrap_or_default();
 
-                            let script_path = if p1.exists() {
-                                p1.to_string_lossy().to_string()
-                            } else if p2.exists() {
-                                p2.to_string_lossy().to_string()
-                            } else {
-                                resource_path.join("backend-sidecar").join("main.py").to_string_lossy().to_string()
-                            };
+                let candidates = vec![
+                    curr_dir.join("backend-sidecar").join("main.py"),
+                    curr_dir.parent().map(|p| p.join("backend-sidecar").join("main.py")).unwrap_or_default(),
+                    std::path::PathBuf::from("backend-sidecar/main.py"),
+                    std::path::PathBuf::from("../backend-sidecar/main.py"),
+                    resource_path.join("backend-sidecar").join("main.py"),
+                ];
 
-                            println!("[m0x-flow] Dev mode: Launching python sidecar script {}", script_path);
-                            shell.command("python").args([&script_path, "--port", "14321"]).spawn()
-                        }
-                    },
-                    Err(_) => {
-                        let curr_dir = std::env::current_dir().unwrap_or_default();
-                        let p1 = curr_dir.join("backend-sidecar").join("main.py");
-                        let p2 = curr_dir.join("src-tauri").join("..").join("backend-sidecar").join("main.py");
-                        let resource_path = app.path().resource_dir().unwrap_or_default();
-
-                        let script_path = if p1.exists() {
-                            p1.to_string_lossy().to_string()
-                        } else if p2.exists() {
-                            p2.to_string_lossy().to_string()
+                let mut script_path = None;
+                for c in candidates {
+                    if c.as_os_str().is_empty() {
+                        continue;
+                    }
+                    if c.exists() {
+                        let path_str = if let Ok(canon) = c.canonicalize() {
+                            canon.to_string_lossy().to_string()
                         } else {
-                            resource_path.join("backend-sidecar").join("main.py").to_string_lossy().to_string()
+                            c.to_string_lossy().to_string()
                         };
-
-                        println!("[m0x-flow] Dev mode: Launching python sidecar script {}", script_path);
-                        shell.command("python").args([&script_path, "--port", "14321"]).spawn()
+                        let clean_path = path_str.trim_start_matches(r"\\?\").to_string();
+                        script_path = Some(clean_path);
+                        break;
                     }
                 }
+
+                if let Some(path) = script_path {
+                    println!("[m0x-flow] Dev mode: Launching python sidecar script {}", path);
+                    shell.command("python").args([&path, "--port", "14321"]).spawn()
+                } else {
+                    println!("[m0x-flow] Dev mode: Fallback to bundled sidecar binary...");
+                    shell.sidecar("backend-sidecar")
+                        .and_then(|cmd| cmd.args(["--port", "14321"]).spawn())
+                }
             } else {
-                println!("[m0x-flow] Release mode: Spawning bundled sidecar executable...");
+                println!("[m0x-flow] Release mode: Spawning bundled sidecar executable from software folder...");
                 shell
                     .sidecar("backend-sidecar")
                     .expect("Failed to construct backend-sidecar command")
