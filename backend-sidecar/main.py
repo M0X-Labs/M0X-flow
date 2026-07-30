@@ -255,10 +255,18 @@ async def search_huggingface_models(q: str = Query("", description="Search term 
     return {"results": search_curated_models(q)}
 
 
+from hf_downloader import trigger_hf_download, get_download_status, cancel_hf_download
+
+
 # ─── Live Inference & Management Endpoints ─────────────────────────────────
 
 
 class DownloadRequest(BaseModel):
+    model_id: str
+    quantization: str = "Q4_K_M"
+
+
+class CancelDownloadRequest(BaseModel):
     model_id: str
 
 
@@ -270,23 +278,26 @@ class ChatCompletionRequest(BaseModel):
 
 @app.post("/api/models/download")
 async def download_model(req: DownloadRequest):
-    """Trigger physical model file/directory creation in configured models directory."""
+    """Trigger physical streaming download from Hugging Face Hub into configured models directory."""
     curr_dir = get_current_models_dir()
-    safe_name = req.model_id.replace("/", "--")
-    model_path = curr_dir / safe_name
-    model_path.mkdir(parents=True, exist_ok=True)
-
-    # Create metadata marker file
-    info_file = model_path / "model_info.json"
-    with open(info_file, "w", encoding="utf-8") as f:
-        json.dump({"id": req.model_id, "status": "ready", "engine": "m0x-flow"}, f, indent=2)
-
+    job = trigger_hf_download(req.model_id, req.quantization, curr_dir)
     return {
         "status": "success",
         "model_id": req.model_id,
-        "path": str(model_path),
-        "message": f"Successfully registered model weights to {model_path}",
+        "job": job,
     }
+
+
+@app.get("/api/models/download/status")
+async def download_status(model_id: str = Query(..., description="Model ID to check status for")):
+    """Return real-time streaming download status, percentage, speed and bytes downloaded."""
+    return get_download_status(model_id)
+
+
+@app.post("/api/models/download/cancel")
+async def cancel_download(req: CancelDownloadRequest):
+    """Cancel active downloading model job."""
+    return cancel_hf_download(req.model_id)
 
 
 @app.delete("/api/models/delete")

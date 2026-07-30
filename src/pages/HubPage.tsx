@@ -102,38 +102,64 @@ export function HubPage() {
     if (!target) return;
 
     setHfModels((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, isDownloading: true, downloadProgress: 15 } : m))
+      prev.map((m) => (m.id === id ? { ...m, isDownloading: true, downloadProgress: 1, downloadSpeed: "Starting..." } : m))
     );
 
-    // Call Python sidecar backend API to register/download model weights with selected quantization variant
-    fetch("http://localhost:14321/api/models/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model_id: id, quantization: quantization || "Q4_K_M" }),
-    }).catch(() => null);
+    // Call Python sidecar backend API to trigger real HF download
+    try {
+      await fetch("http://localhost:14321/api/models/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_id: id, quantization: quantization || "Q4_K_M" }),
+      });
+    } catch (e) {
+      console.error("Failed to initiate HF download", e);
+    }
 
-    let progress = 15;
-    const interval = setInterval(() => {
-      progress += 25;
-      if (progress >= 100) {
-        clearInterval(interval);
-        const realDownloadedModel: RealModel = {
-          id: target.id,
-          name: `${target.name} (${quantization || "Q4_K_M"})`,
-          repo: target.repo,
-          downloaded: true,
-        };
-        addDownloadedModel(realDownloadedModel);
+    // Poll real-time HF streaming progress from sidecar API
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`http://localhost:14321/api/models/download/status?model_id=${encodeURIComponent(id)}`).catch(() => null);
+        if (res && res.ok) {
+          const statusData = await res.json();
 
-        setHfModels((prev) =>
-          prev.map((m) =>
-            m.id === id ? { ...m, isDownloading: false, downloaded: true, downloadProgress: 100 } : m
-          )
-        );
-      } else {
-        setHfModels((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, downloadProgress: progress } : m))
-        );
+          if (statusData.status === "completed") {
+            clearInterval(interval);
+            const realDownloadedModel: RealModel = {
+              id: target.id,
+              name: `${target.name} (${quantization || "Q4_K_M"})`,
+              repo: target.repo,
+              downloaded: true,
+            };
+            addDownloadedModel(realDownloadedModel);
+
+            setHfModels((prev) =>
+              prev.map((m) =>
+                m.id === id ? { ...m, isDownloading: false, downloaded: true, downloadProgress: 100, downloadSpeed: "Done" } : m
+              )
+            );
+          } else if (statusData.status === "failed" || statusData.status === "cancelled") {
+            clearInterval(interval);
+            setHfModels((prev) =>
+              prev.map((m) => (m.id === id ? { ...m, isDownloading: false, downloadProgress: 0 } : m))
+            );
+          } else {
+            setHfModels((prev) =>
+              prev.map((m) =>
+                m.id === id
+                  ? {
+                      ...m,
+                      isDownloading: true,
+                      downloadProgress: statusData.progress || 1,
+                      downloadSpeed: statusData.speed || "Downloading...",
+                    }
+                  : m
+              )
+            );
+          }
+        }
+      } catch (e) {
+        console.error("Error polling HF download status", e);
       }
     }, 500);
   };
