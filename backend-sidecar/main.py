@@ -217,12 +217,18 @@ app.add_middleware(
 async def health_check():
     """Health check endpoint for the Tauri frontend and P2P peer discovery."""
     curr = get_current_models_dir()
+    gpu_name, vram_str, ram_str = get_real_hardware_specs()
+    hostname = socket.gethostname()
     return {
         "status": "ok",
         "engine": "m0x-flow-sidecar",
         "version": "0.1.0",
         "pods_enabled": True,
         "models_dir": str(curr),
+        "hostname": hostname,
+        "deviceType": gpu_name,
+        "vram_total_gb": vram_str,
+        "ram_total_gb": ram_str,
     }
 
 
@@ -567,17 +573,7 @@ def set_pods_enabled(enabled: bool):
         print(f"[m0x-sidecar] Warning: failed to save pods_enabled to config: {e}", flush=True)
 
 
-def is_network_gateway(ip: str) -> bool:
-    """Filter out router/gateway/Wi-Fi domains so only real computers are considered."""
-    if ip.endswith(".1") or ip.endswith(".255") or ip.startswith("224.") or ip.startswith("239."):
-        return True
-    try:
-        name = socket.gethostbyaddr(ip)[0].lower()
-        if any(w in name for w in ["mshome", "airtelfiber", "router", "gateway", "modem", "localdomain", "broadband"]):
-            return True
-    except Exception:
-        pass
-    return False
+
 
 
 @app.get("/api/pods/config")
@@ -724,13 +720,7 @@ def verify_m0x_peer(ip: str, port: int = 14321):
                     try:
                         data = json.loads(resp.read().decode("utf-8"))
                         if data.get("engine") == "m0x-flow-sidecar" or data.get("status") in ["ok", "ready"] or "hostname" in data or "pods_enabled" in data:
-                            hostname = data.get("hostname")
-                            if not hostname:
-                                try:
-                                    hostname = socket.gethostbyaddr(ip)[0]
-                                except Exception:
-                                    hostname = f"m0x Peer ({ip})"
-
+                            hostname = data.get("hostname") or f"m0x Peer ({ip})"
                             return {
                                 "ip": ip,
                                 "hostname": hostname,
@@ -751,10 +741,6 @@ def verify_m0x_peer(ip: str, port: int = 14321):
         s.close()
         if res == 0:
             hostname = f"LAN Peer ({ip})"
-            try:
-                hostname = socket.gethostbyaddr(ip)[0]
-            except Exception:
-                pass
             return {
                 "ip": ip,
                 "hostname": hostname,
@@ -768,17 +754,32 @@ def verify_m0x_peer(ip: str, port: int = 14321):
     return None
 
 
-def get_real_host_node():
-    """Discover real local host device name, platform GPU/CPU info, LAN IP, VRAM and RAM specs."""
-    hostname = socket.gethostname()
-    local_ip = "127.0.0.1"
+def get_local_ip() -> str:
+    """Retrieve actual LAN IP without relying solely on 8.8.8.8, falling back to 0.0.0.0"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
+        ip = s.getsockname()[0]
         s.close()
+        return ip
     except Exception:
         pass
+    
+    try:
+        import psutil
+        for iface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET and not addr.address.startswith("127.") and not addr.address.startswith("169.254."):
+                    return addr.address
+    except Exception:
+        pass
+    
+    return "0.0.0.0"
+
+def get_real_host_node():
+    """Discover real local host device name, platform GPU/CPU info, LAN IP, VRAM and RAM specs."""
+    hostname = socket.gethostname()
+    local_ip = get_local_ip()
 
     gpu_name, vram_str, ram_str = get_real_hardware_specs()
     is_hosted = HOSTED_MODEL_STATE["is_hosted"]
@@ -854,20 +855,18 @@ def udp_broadcast_probe():
 CACHED_LAN_PEERS: List[dict] = []
 
 
+def is_network_gateway(ip: str) -> bool:
+    """Check if IP address is a router/gateway (ends in .1 or .255)."""
+    return ip.endswith(".1") or ip.endswith(".255") or ip == "0.0.0.0" or ip == "127.0.0.1"
+
+
 def scan_real_lan_devices():
     """Scan local network and filter ONLY computers running m0x-flow software with Pods enabled."""
     global CACHED_LAN_PEERS
     load_saved_peers()
     discovered = []
 
-    host_ip = "127.0.0.1"
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        host_ip = s.getsockname()[0]
-        s.close()
-    except Exception:
-        pass
+    host_ip = get_local_ip()
 
     candidate_ips = set()
 
@@ -902,13 +901,13 @@ def scan_real_lan_devices():
             if ip != host_ip and not is_network_gateway(ip):
                 candidate_ips.add(ip)
 
-    # Fast TCP pre-check filter to eliminate unreachable IP delays
+    # Fast TCP pre-check filter with 0.35s timeout for Wi-Fi network reliability
     def fast_ping_check(ip):
         if any(p.get("ipAddress") == ip for p in MANUAL_PEERS):
             return ip
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.12)
+            s.settimeout(0.35)
             res = s.connect_ex((ip, 14321))
             s.close()
             return ip if res == 0 else None
@@ -1013,14 +1012,7 @@ async def connect_ip_peer(req: ConnectPeerRequest):
     if not ip:
         raise HTTPException(status_code=400, detail="IP address cannot be empty.")
 
-    host_ip = "127.0.0.1"
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        host_ip = s.getsockname()[0]
-        s.close()
-    except Exception:
-        pass
+    host_ip = get_local_ip()
 
     if ip == "127.0.0.1" or ip == host_ip or ip.lower() == "localhost":
         raise HTTPException(status_code=400, detail="Target IP is the host workstation itself.")
@@ -1030,10 +1022,6 @@ async def connect_ip_peer(req: ConnectPeerRequest):
 
     if not peer_info:
         hostname = f"Peer Laptop ({ip})"
-        try:
-            hostname = socket.gethostbyaddr(ip)[0]
-        except Exception:
-            pass
         peer_info = {
             "ip": ip,
             "hostname": hostname,

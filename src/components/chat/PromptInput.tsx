@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, Paperclip, Sparkles, ChevronDown, Download, Check } from "lucide-react";
+import { ArrowUp, Square, Paperclip, Sparkles, ChevronDown, Download, Check, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { getStoredModels, RealModel } from "@/lib/useModelStore";
+import { getStoredModels, RealModel, getStoredCustomModels, CustomModel } from "@/lib/useModelStore";
 
 interface PromptInputProps {
   onSendMessage?: (text: string, model: string) => void;
@@ -16,17 +16,24 @@ interface PromptInputProps {
 export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = false }: PromptInputProps) {
   const [prompt, setPrompt] = useState("");
   const [downloadedModels, setDownloadedModels] = useState<RealModel[]>([]);
+  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [showModelMenu, setShowModelMenu] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  // Load real models from local storage / sidecar
+  // Load real models and custom models from local storage / sidecar
   useEffect(() => {
     const models = getStoredModels();
+    const custom = getStoredCustomModels();
     setDownloadedModels(models);
-    if (models.length > 0 && !selectedModelId) {
+    setCustomModels(custom);
+    
+    // Prefer custom models first, then downloaded models
+    if (custom.length > 0 && !selectedModelId) {
+      setSelectedModelId(`custom-${custom[0].id}`);
+    } else if (models.length > 0 && !selectedModelId) {
       setSelectedModelId(models[0].id);
     }
   }, [showModelMenu, selectedModelId]);
@@ -72,6 +79,15 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
   };
 
   const activeModel = downloadedModels.find((m) => m.id === selectedModelId);
+  const activeCustomModel = selectedModelId?.startsWith("custom-") 
+    ? customModels.find((m) => m.id === selectedModelId.replace("custom-", ""))
+    : null;
+
+  const displayModelName = activeCustomModel 
+    ? activeCustomModel.name 
+    : activeModel?.name 
+    ? activeModel.name 
+    : "Select Model";
 
   return (
     <div className="p-4 bg-gradient-to-t from-[#09090b] via-[#09090b]/95 to-transparent z-20 relative select-none">
@@ -86,24 +102,61 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
             >
               <Sparkles className="w-3.5 h-3.5 text-[#a1a1aa]" />
               <span className="font-mono text-xs truncate max-w-[220px]">
-                {activeModel ? activeModel.name : "Select Model (Hugging Face)"}
+                {displayModelName}
               </span>
               <ChevronDown className={`w-3.5 h-3.5 text-[#71717a] transition-transform duration-200 ${showModelMenu ? "rotate-180" : ""}`} />
             </button>
 
             {/* Dropdown Menu */}
             {showModelMenu && (
-              <div className="absolute left-0 bottom-full mb-2.5 w-84 rounded-2xl bg-[#121215] border border-[#27272a] py-2 z-50 shadow-2xl">
-                <div className="px-3.5 py-1.5 text-[10px] font-mono text-[#a1a1aa] uppercase tracking-wider border-b border-[#27272a] mb-1 flex items-center justify-between">
+              <div className="absolute left-0 bottom-full mb-2.5 w-84 rounded-2xl bg-[#121215] border border-[#27272a] py-2 z-50 shadow-2xl max-h-96 overflow-y-auto">
+                {/* Custom Models Section */}
+                {customModels.length > 0 && (
+                  <>
+                    <div className="px-3.5 py-1.5 text-[10px] font-mono text-[#a1a1aa] uppercase tracking-wider border-b border-[#27272a] mb-1 flex items-center justify-between sticky top-0 bg-[#121215] z-10">
+                      <span>Custom Models</span>
+                      <span className="text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
+                        {customModels.length}
+                      </span>
+                    </div>
+                    <div className="space-y-0.5 px-1 mb-2">
+                      {customModels.map((model) => (
+                        <button
+                          key={`custom-${model.id}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedModelId(`custom-${model.id}`);
+                            setShowModelMenu(false);
+                          }}
+                          className={`w-full text-left px-3.5 py-2 text-xs rounded-xl flex items-center justify-between hover:bg-[#18181c] transition-all cursor-pointer ${
+                            selectedModelId === `custom-${model.id}`
+                              ? "text-white font-bold bg-[#27272a] border border-[#3f3f46]"
+                              : "text-[#a1a1aa]"
+                          }`}
+                        >
+                          <div>
+                            <div className="font-mono truncate">{model.name}</div>
+                            <div className="text-[9px] text-[#71717a]">{model.apiProvider.toUpperCase()}</div>
+                          </div>
+                          {selectedModelId === `custom-${model.id}` && <Check className="w-3.5 h-3.5 text-[#f4f4f5] shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="border-t border-[#27272a] my-1 pt-1"></div>
+                  </>
+                )}
+
+                {/* Downloaded Models Section */}
+                <div className="px-3.5 py-1.5 text-[10px] font-mono text-[#a1a1aa] uppercase tracking-wider border-b border-[#27272a] mb-1 flex items-center justify-between sticky top-12 bg-[#121215] z-10">
                   <span>Downloaded Models</span>
                   <span className="text-[#f4f4f5] font-bold bg-[#18181c] px-2 py-0.5 rounded border border-[#27272a]">
                     {downloadedModels.length}
                   </span>
                 </div>
 
-                {downloadedModels.length === 0 ? (
+                {downloadedModels.length === 0 && customModels.length === 0 ? (
                   <div className="p-4 text-center">
-                    <p className="text-xs text-[#a1a1aa] mb-3 font-sans">No local models downloaded yet.</p>
+                    <p className="text-xs text-[#a1a1aa] mb-3 font-sans">No models configured yet.</p>
                     <button
                       type="button"
                       onClick={() => {
@@ -115,9 +168,9 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
                       <Download className="w-3.5 h-3.5" /> Download Models in Hub
                     </button>
                   </div>
-                ) : (
+                ) : downloadedModels.length > 0 ? (
                   <>
-                    <div className="max-h-56 overflow-y-auto space-y-0.5 px-1">
+                    <div className="max-h-40 overflow-y-auto space-y-0.5 px-1">
                       {downloadedModels.map((model) => (
                         <button
                           key={model.id}
@@ -148,9 +201,19 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
                       >
                         <Download className="w-3.5 h-3.5 text-[#a1a1aa]" /> Browse Hugging Face Hub...
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowModelMenu(false);
+                          navigate("/settings");
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-[#f4f4f5] hover:bg-[#18181c] rounded-xl transition-colors flex items-center gap-2 font-medium cursor-pointer"
+                      >
+                        <Settings className="w-3.5 h-3.5 text-[#a1a1aa]" /> Add Custom Model...
+                      </button>
                     </div>
                   </>
-                )}
+                ) : null}
               </div>
             )}
           </div>

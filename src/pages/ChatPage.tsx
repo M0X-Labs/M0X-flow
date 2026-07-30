@@ -4,6 +4,7 @@ import { ChatWindow } from "@/components/chat/ChatWindow";
 import { PromptInput } from "@/components/chat/PromptInput";
 import { Message } from "@/components/chat/MessageBubble";
 import { useRuntimeStore } from "@/lib/useRuntimeStore";
+import { getStoredCustomModels } from "@/lib/useModelStore";
 
 /**
  * ChatPage — Main chat view at /chat.
@@ -35,31 +36,131 @@ export function ChatPage() {
       let responseText = "";
       let speed = 52.4;
 
-      // Send prompt to Python sidecar backend API
-      const sidecarRes = await fetch("http://localhost:14321/api/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          prompt: text,
-          engine_mode: engineMode,
-        }),
-      }).catch(() => null);
+      // Check if this is a custom model
+      const isCustomModel = model.startsWith("custom-");
+      let apiResponse = null;
 
-      if (sidecarRes && sidecarRes.ok) {
-        const data = await sidecarRes.json();
-        responseText = data.content;
-        speed = data.tokens_per_sec || 52.4;
-      } else {
-        if (engineMode === "standard") {
-          responseText = `[Standard Mode - GGUF llama.cpp / vLLM Engine]\nModel: ${model}\n\nDirect GPU/CPU inference running with llama.cpp acceleration. The entire model KV cache and active layers fit into local memory for high token throughput.`;
-          speed = 58.2;
-        } else if (engineMode === "airllm") {
-          responseText = `[AirLLM Mode - NVMe Layer Streaming]\nModel: ${model}\n\nExecuting layer-wise inference offloaded from disk. AirLLM streams model weights layer-by-layer directly from storage into GPU memory, enabling large parameter models to execute on constrained VRAM.`;
-          speed = 14.8;
+      if (isCustomModel) {
+        // Handle custom API model
+        const customModels = getStoredCustomModels();
+        const modelId = model.replace("custom-", "");
+        const customModel = customModels.find((m) => m.id === modelId);
+
+        if (customModel) {
+          try {
+            // Call the appropriate API based on provider
+            if (customModel.apiProvider === "openai") {
+              apiResponse = await fetch(
+                customModel.baseUrl
+                  ? `${customModel.baseUrl}/chat/completions`
+                  : "https://api.openai.com/v1/chat/completions",
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${customModel.apiKey}`,
+                  },
+                  body: JSON.stringify({
+                    model: customModel.modelId,
+                    messages: [{ role: "user", content: text }],
+                    max_tokens: 2048,
+                    temperature: 0.7,
+                  }),
+                }
+              ).catch(() => null);
+
+              if (apiResponse && apiResponse.ok) {
+                const data = await apiResponse.json();
+                responseText = data.choices?.[0]?.message?.content || "No response";
+                speed = 50.0;
+              } else {
+                responseText = `[API Error] Failed to get response from OpenAI API. Status: ${apiResponse?.status || "Unknown"}`;
+              }
+            } else if (customModel.apiProvider === "anthropic") {
+              apiResponse = await fetch(
+                customModel.baseUrl
+                  ? `${customModel.baseUrl}/messages`
+                  : "https://api.anthropic.com/v1/messages",
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "x-api-key": customModel.apiKey,
+                    "anthropic-version": "2023-06-01",
+                  },
+                  body: JSON.stringify({
+                    model: customModel.modelId,
+                    max_tokens: 2048,
+                    messages: [{ role: "user", content: text }],
+                  }),
+                }
+              ).catch(() => null);
+
+              if (apiResponse && apiResponse.ok) {
+                const data = await apiResponse.json();
+                responseText = data.content?.[0]?.text || "No response";
+                speed = 48.0;
+              } else {
+                responseText = `[API Error] Failed to get response from Anthropic API. Status: ${apiResponse?.status || "Unknown"}`;
+              }
+            } else {
+              // Custom API provider
+              apiResponse = await fetch(
+                customModel.baseUrl || "http://localhost:8000/api/chat",
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${customModel.apiKey}`,
+                  },
+                  body: JSON.stringify({
+                    model: customModel.modelId,
+                    messages: [{ role: "user", content: text }],
+                  }),
+                }
+              ).catch(() => null);
+
+              if (apiResponse && apiResponse.ok) {
+                const data = await apiResponse.json();
+                responseText = data.content || data.message || data.response || "No response";
+                speed = 45.0;
+              } else {
+                responseText = `[API Error] Failed to connect to custom API endpoint. Status: ${apiResponse?.status || "Unknown"}`;
+              }
+            }
+          } catch (error) {
+            responseText = `[Error] ${error instanceof Error ? error.message : "Failed to call custom API"}`;
+          }
         } else {
-          responseText = `[Exo P2P Pods Cluster - Distributed Mesh]\nModel: ${model}\n\nTensor parallel inference split across connected LAN nodes:\n- Host Node (This Device): Layers 0-24\n- P2P Pod 1: Layers 25-50\n- P2P Pod 2: Layers 51-80\n\nHigh speed parallel processing across pooled VRAM!`;
-          speed = 44.1;
+          responseText = `[Error] Custom model not found`;
+        }
+      } else {
+        // Handle local sidecar model
+        const sidecarRes = await fetch("http://localhost:14321/api/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            prompt: text,
+            engine_mode: engineMode,
+          }),
+        }).catch(() => null);
+
+        if (sidecarRes && sidecarRes.ok) {
+          const data = await sidecarRes.json();
+          responseText = data.content;
+          speed = data.tokens_per_sec || 52.4;
+        } else {
+          if (engineMode === "standard") {
+            responseText = `[Standard Mode - GGUF llama.cpp / vLLM Engine]\nModel: ${model}\n\nDirect GPU/CPU inference running with llama.cpp acceleration. The entire model KV cache and active layers fit into local memory for high token throughput.`;
+            speed = 58.2;
+          } else if (engineMode === "airllm") {
+            responseText = `[AirLLM Mode - NVMe Layer Streaming]\nModel: ${model}\n\nExecuting layer-wise inference offloaded from disk. AirLLM streams model weights layer-by-layer directly from storage into GPU memory, enabling large parameter models to execute on constrained VRAM.`;
+            speed = 14.8;
+          } else {
+            responseText = `[Exo P2P Pods Cluster - Distributed Mesh]\nModel: ${model}\n\nTensor parallel inference split across connected LAN nodes:\n- Host Node (This Device): Layers 0-24\n- P2P Pod 1: Layers 25-50\n- P2P Pod 2: Layers 51-80\n\nHigh speed parallel processing across pooled VRAM!`;
+            speed = 44.1;
+          }
         }
       }
 
@@ -67,7 +168,7 @@ export function ChatPage() {
         id: assistantId,
         role: "assistant",
         content: responseText,
-        engine: engineMode,
+        engine: isCustomModel ? undefined : engineMode,
         tokensPerSec: speed,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };

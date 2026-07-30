@@ -13,7 +13,18 @@ export interface RealModel {
   downloadSpeed?: string;
 }
 
+export interface CustomModel {
+  id: string;
+  name: string;
+  apiProvider: "openai" | "anthropic" | "custom";
+  modelId: string;
+  apiKey: string;
+  baseUrl?: string;
+  createdAt: number;
+}
+
 const STORAGE_KEY = "m0x_downloaded_models";
+const CUSTOM_MODELS_KEY = "m0x_custom_models";
 
 export function getStoredModels(): RealModel[] {
   try {
@@ -32,6 +43,26 @@ export function saveStoredModels(models: RealModel[]) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(models));
   } catch (e) {
     console.error("Failed to save models to storage", e);
+  }
+}
+
+export function getStoredCustomModels(): CustomModel[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_MODELS_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error("Failed to parse stored custom models", e);
+  }
+  return [];
+}
+
+export function saveStoredCustomModels(models: CustomModel[]) {
+  try {
+    localStorage.setItem(CUSTOM_MODELS_KEY, JSON.stringify(models));
+  } catch (e) {
+    console.error("Failed to save custom models to storage", e);
   }
 }
 
@@ -86,5 +117,42 @@ export function useModelStore() {
     downloadedModels,
     addDownloadedModel,
     removeDownloadedModel,
+  };
+}
+
+export function useCustomModelStore() {
+  const [customModels, setCustomModels] = useState<CustomModel[]>(getStoredCustomModels());
+
+  const addCustomModel = (model: CustomModel) => {
+    setCustomModels((prev) => {
+      const updated = [...prev, { ...model, id: model.id || Date.now().toString() }];
+      saveStoredCustomModels(updated);
+      return updated;
+    });
+  };
+
+  const removeCustomModel = (modelId: string) => {
+    setCustomModels((prev) => {
+      const updated = prev.filter((m) => m.id !== modelId);
+      saveStoredCustomModels(updated);
+      return updated;
+    });
+  };
+
+  const updateCustomModel = (modelId: string, updates: Partial<CustomModel>) => {
+    setCustomModels((prev) => {
+      const updated = prev.map((m) =>
+        m.id === modelId ? { ...m, ...updates } : m
+      );
+      saveStoredCustomModels(updated);
+      return updated;
+    });
+  };
+
+  return {
+    customModels,
+    addCustomModel,
+    removeCustomModel,
+    updateCustomModel,
   };
 }
