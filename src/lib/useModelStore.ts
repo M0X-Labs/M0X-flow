@@ -45,7 +45,7 @@ export function useModelStore() {
         const res = await fetch("http://localhost:14321/api/models/downloaded").catch(() => null);
         if (res && res.ok) {
           const data = await res.json();
-          if (data.models && Array.isArray(data.models) && data.models.length > 0) {
+          if (data.models && Array.isArray(data.models)) {
             const sidecarModels: RealModel[] = data.models.map((m: any) => ({
               id: m.id,
               name: m.name,

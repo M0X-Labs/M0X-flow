@@ -7,7 +7,7 @@ import { useModelStore, RealModel } from "@/lib/useModelStore";
 
 /**
  * HubPage — Model Hub view at /hub.
- * Searches and displays REAL open-weight LLMs dynamically fetched from Hugging Face Hub.
+ * Searches and displays REAL open-weight LLMs dynamically fetched from models_db.py via the backend sidecar.
  */
 export function HubPage() {
   const { downloadedModels, addDownloadedModel, removeDownloadedModel } = useModelStore();
@@ -20,69 +20,74 @@ export function HubPage() {
   const [engineFilter, setEngineFilter] = useState<"all" | "standard" | "airllm" | "exo">("all");
   const [sizeFilter, setSizeFilter] = useState<"all" | "small" | "medium" | "large">("all");
 
-  // Fetch Curated Supported Open-Weight LLMs
+  // Fetch Models strictly from backend sidecar (models_db.py)
   const fetchRealHfModels = async (query = "") => {
     setLoading(true);
     try {
-      let data = null;
-      const sidecarRes = await fetch(
+      let sidecarRes = await fetch(
         `http://localhost:14321/api/models/search?q=${encodeURIComponent(query)}`
       ).catch(() => null);
 
+      // Retry up to 2 times if sidecar is still initializing
+      if (!sidecarRes || !sidecarRes.ok) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        sidecarRes = await fetch(
+          `http://localhost:14321/api/models/search?q=${encodeURIComponent(query)}`
+        ).catch(() => null);
+      }
+
       if (sidecarRes && sidecarRes.ok) {
         const sidecarData = await sidecarRes.json();
-        data = sidecarData.results;
-      }
+        const data = sidecarData.results;
 
+        if (data && Array.isArray(data)) {
+          const formatted: ModelSpec[] = data.map((item: any) => {
+            const isDownloaded = downloadedModels.some((d) => d.id === item.id);
+            const paramSize = item.parameter_size || item.id.match(/\d+[bB]/)?.[0]?.toUpperCase() || "7B";
+            const repoLower = item.id.toLowerCase();
 
-      if (data && Array.isArray(data)) {
-        const formatted: ModelSpec[] = data.map((item: any) => {
-          const isDownloaded = downloadedModels.some((d) => d.id === item.id);
-          const paramSize = item.id.match(/\d+[bB]/)?.[0]?.toUpperCase() || "7B";
-          const repoLower = item.id.toLowerCase();
+            const isGguf = repoLower.includes("gguf") || item.tags?.includes("gguf") || item.weight_format === "GGUF";
+            const format = item.weight_format || (isGguf ? "GGUF" : "Safetensors");
 
-          const isGguf = repoLower.includes("gguf") || item.tags?.includes("gguf");
-          const format = item.weight_format || (isGguf ? "GGUF" : "Safetensors");
+            let bits = item.bit_precision;
+            if (!bits) {
+              if (repoLower.includes("q4") || repoLower.includes("iq4")) bits = "4-bit (Q4_K_M Quantized)";
+              else if (repoLower.includes("q5")) bits = "5-bit (Q5_K_M Quantized)";
+              else if (repoLower.includes("q8")) bits = "8-bit (Q8_0 Quantized)";
+              else bits = isGguf ? "4-bit (Q4_K_M Quantized)" : "16-bit (FP16 Half Precision)";
+            }
 
-          let bits = item.bit_precision;
-          if (!bits) {
-            if (repoLower.includes("q4") || repoLower.includes("iq4")) bits = "4-bit (Q4_K_M Quantized)";
-            else if (repoLower.includes("q5")) bits = "5-bit (Q5_K_M Quantized)";
-            else if (repoLower.includes("q8")) bits = "8-bit (Q8_0 Quantized)";
-            else bits = isGguf ? "4-bit (Q4_K_M Quantized)" : "16-bit (FP16 Half Precision)";
-          }
+            const isEmbedding = repoLower.includes("embedding");
 
-          const isEmbedding = repoLower.includes("embedding");
+            return {
+              id: item.id,
+              name: item.name || item.id.split("/")[1] || item.id,
+              repo: item.repo || item.id,
+              parameterSize: paramSize,
+              realSizeGB: item.real_size_gb || (isGguf ? "4.8 GB" : "15.2 GB"),
+              quantization: isGguf ? "GGUF Q4_K_M" : "Safetensors FP16",
+              availableQuantizations: item.available_quantizations,
+              weightFormat: format,
+              bitPrecision: bits,
+              license: item.license || "Apache 2.0",
+              contextWindow: item.context_window || "32K Tokens",
+              likes: item.likes || 0,
+              downloads: item.downloads || 0,
+              standardRam: isGguf ? "~4-8 GB VRAM" : "~8-16 GB VRAM",
+              airllmRam: "4-8 GB VRAM (Layered NVMe)",
+              exoRam: isEmbedding ? "N/A" : "~16-64 GB (P2P Mesh Pool)",
+              supportsStandard: !isEmbedding || isGguf,
+              supportsAirllm: true,
+              supportsExo: !isEmbedding,
+              downloaded: isDownloaded,
+            };
+          });
 
-          return {
-            id: item.id,
-            name: item.name || item.id.split("/")[1] || item.id,
-            repo: item.repo || item.id,
-            parameterSize: item.parameter_size || paramSize,
-            realSizeGB: item.real_size_gb || (isGguf ? "4.8 GB" : "15.2 GB"),
-            quantization: isGguf ? "GGUF Q4_K_M" : "Safetensors FP16",
-            availableQuantizations: item.available_quantizations,
-            weightFormat: format,
-            bitPrecision: bits,
-            license: item.license || "Apache 2.0",
-            contextWindow: item.context_window || "32K Tokens",
-            likes: item.likes || 0,
-            downloads: item.downloads || 0,
-            standardRam: isGguf ? "~4-8 GB VRAM" : "~8-16 GB VRAM",
-            airllmRam: "4-8 GB VRAM (Layered NVMe)",
-            exoRam: isEmbedding ? "N/A" : "~16-64 GB (P2P Mesh Pool)",
-            supportsStandard: !isEmbedding || isGguf,
-            supportsAirllm: true,
-            supportsExo: !isEmbedding,
-            downloaded: isDownloaded,
-          };
-
-
-        });
-        setHfModels(formatted);
+          setHfModels(formatted);
+        }
       }
     } catch (e) {
-      console.error("Failed to fetch Hugging Face models", e);
+      console.error("Failed to fetch models from sidecar", e);
     } finally {
       setLoading(false);
     }
@@ -90,7 +95,7 @@ export function HubPage() {
 
   useEffect(() => {
     fetchRealHfModels(searchQuery);
-  }, [searchQuery]);
+  }, [searchQuery, downloadedModels]);
 
   const handleDownload = async (id: string, quantization?: string) => {
     const target = hfModels.find((m) => m.id === id);
@@ -223,8 +228,12 @@ export function HubPage() {
         </div>
       </div>
 
-      {/* Storage Bar Overview */}
-      <StorageBar usedGb={downloadedModels.length * 4.8} totalGb={512} modelCount={downloadedModels.length} />
+      {/* Storage Bar Overview — Real Disk Storage & Dynamic Model Download Path */}
+      <StorageBar
+        modelCount={downloadedModels.length}
+        onRefresh={() => fetchRealHfModels(searchQuery)}
+        onPathChange={() => fetchRealHfModels(searchQuery)}
+      />
 
       {/* Main Filter Tabs & Interactive Toolbar */}
       <div className="space-y-3 border-b border-[#27272a] pb-3.5">
