@@ -67,3 +67,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+#gg's
+local.md
