@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build and Output Directories
+dist/
+dist-ssr/
+build/
+.vite/
+backend-sidecar/build/
+backend-sidecar/dist/
+*.local
+
+# Tauri & Rust
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/binaries/*-*.exe
+
+# Python Sidecar & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+
+# Environment Variables & Local Configs
+.env
+.env.local
+.env.*.local
+
+# Application Runtime Storage & Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.m0x-flow/
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
