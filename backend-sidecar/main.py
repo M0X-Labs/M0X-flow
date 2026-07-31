@@ -470,7 +470,7 @@ def start_real_cloudflare_tunnel(port: int = 8080) -> str:
     global CLOUDFLARE_SUBPROCESS
     stop_real_cloudflare_tunnel()
 
-    cloudflared_bin = setup_cloudflared_binary()
+    cloudflared_bin = setup_cloudflared_binary(log_callback=add_system_log)
 
     if cloudflared_bin and os.path.exists(cloudflared_bin):
         try:
@@ -834,7 +834,7 @@ async def host_model(req: HostModelRequest):
     HOSTED_MODEL_STATE["engine_details"] = load_res
 
     if req.cloudflare_active:
-        url = start_real_cloudflare_tunnel(req.port)
+        url = await asyncio.to_thread(start_real_cloudflare_tunnel, req.port)
         CLOUDFLARE_TUNNEL_STATE["active"] = True
         CLOUDFLARE_TUNNEL_STATE["url"] = url
         CLOUDFLARE_TUNNEL_STATE["port"] = req.port
@@ -842,7 +842,7 @@ async def host_model(req: HostModelRequest):
         HOSTED_MODEL_STATE["cloudflare_active"] = True
         HOSTED_MODEL_STATE["cloudflare_url"] = url
     else:
-        stop_real_cloudflare_tunnel()
+        await asyncio.to_thread(stop_real_cloudflare_tunnel)
         CLOUDFLARE_TUNNEL_STATE["active"] = False
         CLOUDFLARE_TUNNEL_STATE["url"] = None
         CLOUDFLARE_TUNNEL_STATE["status"] = "disconnected"
@@ -855,7 +855,7 @@ async def host_model(req: HostModelRequest):
 @app.post("/api/model/unhost")
 async def unhost_model():
     """Un-host active model from sidecar / Exo cluster."""
-    stop_real_cloudflare_tunnel()
+    await asyncio.to_thread(stop_real_cloudflare_tunnel)
     llama_engine_instance.unload_model()
     HOSTED_MODEL_STATE["is_hosted"] = False
     HOSTED_MODEL_STATE["model_id"] = None
@@ -873,7 +873,7 @@ async def unhost_model():
 async def toggle_cloudflare_tunnel(req: TunnelConfigRequest):
     """Toggle Cloudflare Tunnel for worldwide secure connection. Always generates a fresh, working link when enabled."""
     if req.enabled:
-        url = start_real_cloudflare_tunnel(req.port)
+        url = await asyncio.to_thread(start_real_cloudflare_tunnel, req.port)
         CLOUDFLARE_TUNNEL_STATE["active"] = True
         CLOUDFLARE_TUNNEL_STATE["url"] = url
         CLOUDFLARE_TUNNEL_STATE["port"] = req.port
@@ -883,7 +883,7 @@ async def toggle_cloudflare_tunnel(req: TunnelConfigRequest):
         HOSTED_MODEL_STATE["cloudflare_url"] = url
         return {"status": "connected", "url": url, "tunnel": CLOUDFLARE_TUNNEL_STATE}
     else:
-        stop_real_cloudflare_tunnel()
+        await asyncio.to_thread(stop_real_cloudflare_tunnel)
         CLOUDFLARE_TUNNEL_STATE["active"] = False
         CLOUDFLARE_TUNNEL_STATE["url"] = None
         CLOUDFLARE_TUNNEL_STATE["status"] = "disconnected"
@@ -1629,6 +1629,15 @@ def main():
     free_port(args.port)
     ensure_windows_firewall_rule()
     start_background_lan_scanner()
+
+    def _prepare_deps():
+        try:
+            print("[m0x-sidecar] Pre-fetching cloudflared binary in background...", flush=True)
+            setup_cloudflared_binary()
+        except Exception:
+            pass
+
+    threading.Thread(target=_prepare_deps, daemon=True).start()
 
     import uvicorn
 
