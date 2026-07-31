@@ -105,10 +105,11 @@ class LlamaEngine:
 
         return None
 
-    def load_model(self, model_identifier: str, models_dir: Path, gpu_layers: int = 99, ctx_size: int = 4096) -> Dict[str, Any]:
-        """Load model into NVIDIA GPU VRAM using llama-server CUDA binary or fallbacks."""
+    def load_model(self, model_identifier: str, models_dir: Path, gpu_layers: int = 99, ctx_size: int = 4096, port: int = 8080) -> Dict[str, Any]:
+        """Load model into NVIDIA GPU VRAM using llama-server CUDA binary or fallbacks on a configurable port."""
         self.unload_model()
         self.active_model_name = model_identifier
+        self.server_port = port
 
         gguf_file = self.find_gguf_file(model_identifier, models_dir)
 

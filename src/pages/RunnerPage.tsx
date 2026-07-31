@@ -1,11 +1,10 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Play,
   Cpu,
   HardDrive,
   Network,
-  CheckCircle2,
   Square,
   MessageSquare,
   ChevronRight,
@@ -14,6 +13,13 @@ import {
   Boxes,
   Sparkles,
   Terminal,
+  Zap,
+  SlidersHorizontal,
+  Check,
+  Globe,
+  Copy,
+  Link as LinkIcon,
+  Server,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRuntimeStore } from "@/lib/useRuntimeStore";
@@ -45,8 +51,8 @@ export interface ModelLoadConfig {
 }
 
 const DEFAULT_CONFIG: ModelLoadConfig = {
-  contextLength: 200000,
-  gpuOffloadLayers: 33,
+  contextLength: 131072,
+  gpuOffloadLayers: 99,
   cpuThreads: 12,
   evalBatchSize: 2048,
   physicalBatchSize: 512,
@@ -54,7 +60,7 @@ const DEFAULT_CONFIG: ModelLoadConfig = {
   unifiedKvCache: true,
   ropeFrequencyBase: 0,
   ropeFrequencyScale: 0,
-  offloadKvCacheGpu: false,
+  offloadKvCacheGpu: true,
   keepModelInMemory: true,
   tryMmap: true,
   seed: "Random Seed",
@@ -70,53 +76,61 @@ const DEFAULT_CONFIG: ModelLoadConfig = {
 
 export function RunnerPage() {
   const navigate = useNavigate();
-  const { hostedModel, hostModel, unhostModel } = useRuntimeStore();
+  const {
+    hostedModel,
+    hostModel,
+    unhostModel,
+    updateNetworkConfig,
+    toggleCloudflare,
+    cloudflareUrl,
+    cloudflareActive,
+  } = useRuntimeStore();
   const { downloadedModels } = useModelStore();
 
   const [showWizard, setShowWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
+  const [hostingPort, setHostingPort] = useState<number>(hostedModel?.port || 8080);
+  const [customPortInput, setCustomPortInput] = useState<string>(String(hostedModel?.port || 8080));
+  const [hostIp, setHostIp] = useState<string>(hostedModel?.hostIp || "127.0.0.1");
+  const [lanIp, setLanIp] = useState<string>("192.168.1.105");
+  const [isCloudflareOn, setIsCloudflareOn] = useState<boolean>(Boolean(hostedModel?.cloudflareActive || cloudflareActive));
 
+  // 3 Connection Modes: 'localhost' (127.0.0.1), 'lan' (Wi-Fi LAN IP), 'cloudflare' (Worldwide Public)
+  const [accessMode, setAccessMode] = useState<"localhost" | "lan" | "cloudflare">(() => {
+    if (hostedModel?.cloudflareActive || cloudflareActive) return "cloudflare";
+    if (hostedModel?.hostIp && hostedModel.hostIp !== "127.0.0.1") return "lan";
+    return "localhost";
+  });
+
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+  const activeCloudflareUrl = hostedModel?.cloudflareUrl || cloudflareUrl;
+
+  // Fetch real LAN IP on load
+  useEffect(() => {
+    fetch("http://localhost:14321/api/system/network")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.lan_ip && data.lan_ip !== "0.0.0.0") {
+          setLanIp(data.lan_ip);
+        }
+      })
+      .catch(() => null);
+  }, []);
+
+  // ONLY show real downloaded models from local storage (~/.m0x-flow/models)
   const realModels = useMemo(() => {
-    if (downloadedModels.length > 0) {
+    if (downloadedModels && downloadedModels.length > 0) {
       return downloadedModels.map((m) => ({
         id: m.id,
         name: m.name,
-        parameterSize: "7B-70B",
+        parameterSize: m.name.includes("27B") ? "27B" : m.name.includes("9B") ? "9B" : "7B-70B",
         weightFormat: m.name.includes("GGUF") ? "GGUF" : "Safetensors",
         quantization: "Q4_K_M",
         maxContext: 131072,
-        baseSizeGb: 4.8,
+        baseSizeGb: (m as any).size_gb || 4.8,
       }));
     }
-    return [
-      {
-        id: "unsloth/Qwen3.6-27B-MTP-GGUF",
-        name: "Qwen3.6-27B-MTP-GGUF",
-        parameterSize: "27B",
-        weightFormat: "GGUF",
-        quantization: "Q4_K_M",
-        maxContext: 131072,
-        baseSizeGb: 16.2,
-      },
-      {
-        id: "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF",
-        name: "Qwen3.5-9B-Heretic-GGUF",
-        parameterSize: "9B",
-        weightFormat: "GGUF",
-        quantization: "Q4_K_M",
-        maxContext: 65536,
-        baseSizeGb: 5.4,
-      },
-      {
-        id: "google/gemma-4-12B-it",
-        name: "gemma-4-12B-it",
-        parameterSize: "12B",
-        weightFormat: "Safetensors",
-        quantization: "FP16",
-        maxContext: 32768,
-        baseSizeGb: 24.0,
-      },
-    ];
+    return [];
   }, [downloadedModels]);
 
   const [selectedModelId, setSelectedModelId] = useState<string>(realModels[0]?.id || "");
@@ -139,16 +153,53 @@ export function RunnerPage() {
     return { gpuVram, totalMem };
   }, [config, activeModel, engineMode]);
 
-  const handleToggleOption = (key: keyof ModelLoadConfig) => {
-    setConfig((prev) => ({ ...prev, [key]: !prev[key] }));
+  const handleCopyText = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedLabel(label);
+    setTimeout(() => setCopiedLabel(null), 2000);
   };
 
   const handleNumberChange = (key: keyof ModelLoadConfig, value: number) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleOpenWizard = () => {
-    if (realModels.length > 0 && !selectedModelId) {
+  const handleAccessModeChange = (newMode: "localhost" | "lan" | "cloudflare") => {
+    setAccessMode(newMode);
+    let targetIp = "127.0.0.1";
+    let isCf = false;
+
+    if (newMode === "localhost") {
+      targetIp = "127.0.0.1";
+      isCf = false;
+    } else if (newMode === "lan") {
+      targetIp = lanIp || "0.0.0.0";
+      isCf = false;
+    } else if (newMode === "cloudflare") {
+      targetIp = lanIp || "0.0.0.0";
+      isCf = true;
+    }
+
+    setHostIp(targetIp);
+    setIsCloudflareOn(isCf);
+    toggleCloudflare(isCf, hostingPort, targetIp);
+
+    if (isCurrentlyLoaded) {
+      updateNetworkConfig(hostingPort, targetIp, isCf);
+    }
+  };
+
+  const handleGlobalPortChange = (portVal: number) => {
+    setHostingPort(portVal);
+    setCustomPortInput(String(portVal));
+    if (isCurrentlyLoaded) {
+      updateNetworkConfig(portVal, hostIp, isCloudflareOn);
+    }
+  };
+
+  const handleOpenWizard = (modelId?: string) => {
+    if (modelId) {
+      setSelectedModelId(modelId);
+    } else if (realModels.length > 0 && !selectedModelId) {
       setSelectedModelId(realModels[0].id);
     }
     setWizardStep(1);
@@ -157,171 +208,284 @@ export function RunnerPage() {
 
   const handleLaunchModel = () => {
     if (!activeModel) return;
-    hostModel(activeModel.id, activeModel.name, engineMode);
+    hostModel(activeModel.id, activeModel.name, engineMode, hostingPort, hostIp, isCloudflareOn);
     setShowWizard(false);
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#09090b] text-[#f4f4f5] overflow-y-auto">
-      {/* Header Bar */}
-      <div className="p-4 border-b border-[#27272a] bg-[#121215] flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-emerald-400">
-              <Play className="w-4 h-4 fill-current" />
+    <div className="flex flex-col h-full bg-[#09090b] text-[#f4f4f5] overflow-y-auto font-sans select-none">
+      {/* Top Header Bar */}
+      <div className="p-4 border-b border-[#27272a] bg-[#121215] flex flex-col xl:flex-row xl:items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-emerald-400 shadow-inner">
+            <Play className="w-5 h-5 fill-current" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">Model Execution Runner</h1>
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-mono text-[10px] font-bold flex items-center gap-1">
+                <Zap className="w-3 h-3" /> CUDA GPU Offload
+              </span>
             </div>
-            <div>
-              <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">Model Runner Launcher</h1>
-              <p className="text-xs text-[#a1a1aa] font-sans">
-                Run downloaded models step-by-step with custom engine mode and hardware tuning parameters.
-              </p>
-            </div>
+            <p className="text-xs text-[#a1a1aa] font-sans mt-0.5">
+              Select connection mode (Localhost, Wi-Fi LAN, or Cloudflare Worldwide) and launch models.
+            </p>
           </div>
         </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center gap-3">
+        {/* Top Controls: 3 Access Modes + Port Switcher */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Access Mode Selector: Exactly 3 Options */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a] text-xs font-mono">
+            <Server className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-[#a1a1aa] font-sans font-bold">Access Mode:</span>
+            <select
+              value={accessMode}
+              onChange={(e) => handleAccessModeChange(e.target.value as any)}
+              className="bg-[#121215] border border-[#3f3f46] text-xs font-mono font-bold text-[#f4f4f5] px-2.5 py-1 rounded-lg outline-none cursor-pointer"
+            >
+              <option value="localhost">🔒 1. Localhost (127.0.0.1)</option>
+              <option value="lan">📶 2. Local Network & Wi-Fi ({lanIp || "LAN Access"})</option>
+              <option value="cloudflare">⚡ 3. Cloudflare Tunnel (Worldwide Access)</option>
+            </select>
+          </div>
+
+          {/* Hosting Port Input */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a]">
+            <Globe className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-xs font-bold text-[#a1a1aa]">Port:</span>
+            <input
+              type="number"
+              value={customPortInput}
+              onChange={(e) => {
+                const val = e.target.value;
+                setCustomPortInput(val);
+                const num = parseInt(val, 10);
+                if (num > 1000 && num <= 65535) {
+                  handleGlobalPortChange(num);
+                }
+              }}
+              className="w-16 bg-[#121215] border border-[#3f3f46] text-xs font-mono font-bold text-[#f4f4f5] px-2 py-1 rounded-lg outline-none text-center"
+              placeholder="8080"
+            />
+          </div>
+
+          {/* Dynamic Base URL Pill based on selected Access Mode */}
+          {accessMode === "cloudflare" ? (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs font-mono">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+              <span className="text-amber-300 font-bold">
+                {activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1"}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopyText(activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1", "header")}
+                className="p-1 hover:bg-amber-500/20 text-amber-300 rounded transition-colors cursor-pointer"
+                title="Copy Worldwide Cloudflare Base URL"
+              >
+                {copiedLabel === "header" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          ) : accessMode === "lan" ? (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs font-mono">
+              <LinkIcon className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-emerald-300 font-bold">http://{lanIp || "0.0.0.0"}:{hostingPort}/v1</span>
+              <button
+                type="button"
+                onClick={() => handleCopyText(`http://${lanIp || "0.0.0.0"}:${hostingPort}/v1`, "header")}
+                className="p-1 hover:bg-emerald-500/20 text-emerald-300 rounded transition-colors cursor-pointer"
+                title="Copy Wi-Fi LAN Base URL"
+              >
+                {copiedLabel === "header" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-xs font-mono">
+              <LinkIcon className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-blue-300 font-bold">http://127.0.0.1:{hostingPort}/v1</span>
+              <button
+                type="button"
+                onClick={() => handleCopyText(`http://127.0.0.1:${hostingPort}/v1`, "header")}
+                className="p-1 hover:bg-blue-500/20 text-blue-300 rounded transition-colors cursor-pointer"
+                title="Copy Localhost Base URL"
+              >
+                {copiedLabel === "header" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          )}
+
           <button
             type="button"
-            onClick={handleOpenWizard}
+            onClick={() => handleOpenWizard()}
             disabled={realModels.length === 0}
-            className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 border ${
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 border cursor-pointer ${
               realModels.length > 0
-                ? "bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 cursor-pointer shadow-lg shadow-emerald-950/40"
+                ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border-emerald-400/30 shadow-lg shadow-emerald-600/20"
                 : "bg-[#18181c] text-[#71717a] border-[#27272a] cursor-not-allowed"
             }`}
           >
-            <Play className="w-3.5 h-3.5 fill-current" /> Launch Model Wizard
+            <Sparkles className="w-4 h-4" />
+            <span>Launch Wizard</span>
           </button>
         </div>
       </div>
 
-      {/* Active Running State Banner */}
-      <div className="p-6 space-y-6 max-w-4xl mx-auto w-full">
+      {/* Main Content Area */}
+      <div className="p-6 max-w-5xl mx-auto w-full space-y-6 flex-1">
+        {/* ACTIVE LOADED MODEL HERO CARD */}
         {isCurrentlyLoaded ? (
           <motion.div
-            initial={{ opacity: 0, y: -6 }}
+            initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+            className="p-5 rounded-2xl bg-gradient-to-br from-[#0f1d18] via-[#121215] to-[#121215] border border-emerald-500/40 shadow-2xl relative overflow-hidden space-y-4"
           >
-            <div className="flex items-center gap-3.5">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="text-base font-bold text-emerald-300">
-                  Model Loaded & Active: {hostedModel?.name}
-                </div>
-                <div className="text-xs text-emerald-400/80 font-mono mt-0.5">
-                  Engine: {hostedModel?.engineMode?.toUpperCase()} | Ready for Chat or API completions
-                </div>
-              </div>
-            </div>
+            <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
 
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => navigate("/chat")}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-950/40 cursor-pointer"
-              >
-                <MessageSquare className="w-4 h-4" /> Open Chat
-              </button>
-              {hostedModel?.engineMode === "exo" && (
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 relative z-10">
+              <div className="space-y-2 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-wider">
+                    Model Active in VRAM
+                  </span>
+
+                  {/* Dynamic Base URL Pill for Active Model */}
+                  {accessMode === "cloudflare" ? (
+                    <div className="flex items-center gap-1.5 text-xs font-mono text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/30">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                      <span>Cloudflare Worldwide: <strong>{activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1"}</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1", "active_cf")}
+                        className="p-1 hover:bg-amber-500/20 rounded text-amber-300 cursor-pointer"
+                        title="Copy Cloudflare Public Base URL"
+                      >
+                        {copiedLabel === "active_cf" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  ) : accessMode === "lan" ? (
+                    <div className="flex items-center gap-1.5 text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/30">
+                      <LinkIcon className="w-3.5 h-3.5" />
+                      <span>Wi-Fi LAN URL: <strong>http://{lanIp || "0.0.0.0"}:{hostedModel?.port || hostingPort}/v1</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(`http://${lanIp || "0.0.0.0"}:${hostedModel?.port || hostingPort}/v1`, "active_lan")}
+                        className="p-1 hover:bg-emerald-500/20 rounded text-emerald-300 cursor-pointer"
+                        title="Copy Wi-Fi LAN Base URL"
+                      >
+                        {copiedLabel === "active_lan" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-xs font-mono text-blue-400 bg-blue-500/10 px-2.5 py-1 rounded-lg border border-blue-500/30">
+                      <LinkIcon className="w-3.5 h-3.5" />
+                      <span>Local URL: <strong>http://127.0.0.1:{hostedModel?.port || hostingPort}/v1</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(`http://127.0.0.1:${hostedModel?.port || hostingPort}/v1`, "active_local")}
+                        className="p-1 hover:bg-blue-500/20 rounded text-blue-300 cursor-pointer"
+                        title="Copy Localhost Base URL"
+                      >
+                        {copiedLabel === "active_local" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <h2 className="text-2xl font-black text-white tracking-tight">{hostedModel?.name}</h2>
+
+                <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-[#a1a1aa] pt-1">
+                  <span className="flex items-center gap-1.5 text-emerald-300">
+                    <Zap className="w-3.5 h-3.5 text-emerald-400" /> GPU Offload: 100% (-ngl 99)
+                  </span>
+                  <span className="flex items-center gap-1.5 text-[#f4f4f5]">
+                    <Cpu className="w-3.5 h-3.5 text-blue-400" /> VRAM: 15.92 GB (RTX 5080)
+                  </span>
+                  <div className="flex items-center gap-1.5 text-[#f4f4f5] bg-[#18181c] px-2.5 py-1 rounded-lg border border-[#27272a]">
+                    <Globe className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Host Port: <strong className="text-emerald-400 font-mono">{hostedModel?.port || hostingPort}</strong></span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[#f4f4f5] bg-[#18181c] px-2.5 py-1 rounded-lg border border-[#27272a]">
+                    <Server className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Mode: <strong className="text-blue-300 font-mono uppercase">{accessMode}</strong></span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons for Active Model */}
+              <div className="flex items-center gap-3 shrink-0">
                 <button
                   type="button"
-                  onClick={() => navigate("/pods")}
-                  className="px-4 py-2 rounded-xl bg-[#18181c] hover:bg-[#222226] border border-[#27272a] text-xs font-bold text-[#f4f4f5] transition-all flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => navigate("/chat")}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all flex items-center gap-2 shadow-lg shadow-emerald-600/30 cursor-pointer border border-emerald-400/40"
                 >
-                  <Network className="w-4 h-4" /> View Exo Pods
+                  <MessageSquare className="w-4 h-4" />
+                  <span>Open Chat</span>
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => unhostModel()}
-                className="px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <Square className="w-3.5 h-3.5" /> Unload Model
-              </button>
+
+                <button
+                  type="button"
+                  onClick={() => navigate("/runtime")}
+                  className="px-4 py-2.5 rounded-xl bg-[#18181c] hover:bg-[#222226] text-[#f4f4f5] border border-[#27272a] text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <SlidersHorizontal className="w-4 h-4 text-blue-400" />
+                  <span>Hardware HUD</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => unhostModel()}
+                  className="px-4 py-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Square className="w-3.5 h-3.5" />
+                  <span>Unload</span>
+                </button>
+              </div>
             </div>
           </motion.div>
         ) : (
-          <div className="p-8 rounded-2xl bg-[#121215] border border-[#27272a] text-center space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#a1a1aa] mx-auto">
-              <Play className="w-6 h-6" />
+          <div className="p-8 rounded-2xl bg-[#121215] border border-[#27272a] text-center space-y-4 shadow-xl relative overflow-hidden">
+            <div className="w-14 h-14 rounded-2xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-emerald-400 mx-auto shadow-inner">
+              <Zap className="w-7 h-7" />
             </div>
+
             <div>
-              <h3 className="text-base font-bold text-[#f4f4f5]">No Active Model Loaded</h3>
+              <h2 className="text-lg font-bold text-[#f4f4f5]">No Active Model Loaded into VRAM</h2>
               <p className="text-xs text-[#a1a1aa] mt-1 max-w-md mx-auto">
-                Launch the Step-by-Step Model Wizard to pick a downloaded model, choose an execution engine, and configure memory parameters.
+                {realModels.length > 0
+                  ? `To run a model on Base URL ${accessMode === "cloudflare" ? (activeCloudflareUrl || "https://m0x-flow.trycloudflare.com") + "/v1" : accessMode === "lan" ? `http://${lanIp}:${hostingPort}/v1` : `http://127.0.0.1:${hostingPort}/v1`}, click the Start Model Launcher Wizard button.`
+                  : "No downloaded models found in local storage. Head over to Model Hub to download GGUF models."}
               </p>
             </div>
 
             {realModels.length > 0 ? (
-              <button
-                type="button"
-                onClick={handleOpenWizard}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all inline-flex items-center gap-2 border border-emerald-500 cursor-pointer shadow-xl shadow-emerald-950/40"
-              >
-                <Play className="w-4 h-4 fill-current" /> Start Step-by-Step Wizard
-              </button>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenWizard()}
+                  className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs transition-all inline-flex items-center gap-2 border border-emerald-400/40 shadow-xl shadow-emerald-950/40 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Start Model Launcher Wizard</span>
+                </button>
+              </div>
             ) : (
-              <div className="p-4 rounded-xl bg-[#18181c] border border-[#27272a] max-w-md mx-auto space-y-3">
-                <p className="text-xs text-[#a1a1aa]">
-                  No real downloaded models found in your local storage (~/.m0x-flow/models).
-                </p>
+              <div className="pt-2">
                 <button
                   type="button"
                   onClick={() => navigate("/hub")}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all inline-flex items-center gap-2 border border-blue-500 cursor-pointer"
+                  className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-all inline-flex items-center gap-2 border border-blue-400/40 shadow-xl cursor-pointer"
                 >
-                  <Boxes className="w-4 h-4" /> Go to Model Hub to Download
+                  <Boxes className="w-4 h-4" />
+                  <span>Go to Model Hub to Download</span>
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* Downloaded Models Inventory Summary */}
-        <div className="space-y-3">
-          <h3 className="text-xs font-mono text-[#a1a1aa] uppercase tracking-wider font-bold flex items-center gap-2">
-            <Boxes className="w-4 h-4 text-[#f4f4f5]" />
-            Downloaded Local Models ({realModels.length})
-          </h3>
-
-          {realModels.length === 0 ? (
-            <div className="p-4 rounded-xl bg-[#121215] border border-[#27272a] text-xs text-[#71717a] font-mono">
-              No models downloaded yet. Download models from the Hub page.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {realModels.map((m) => (
-                <div
-                  key={m.id}
-                  className="p-4 rounded-xl bg-[#121215] border border-[#27272a] hover:border-[#3f3f46] transition-all flex items-center justify-between"
-                >
-                  <div>
-                    <div className="text-xs font-bold text-[#f4f4f5]">{m.name}</div>
-                    <div className="text-[10px] font-mono text-[#71717a] mt-0.5">{m.id}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedModelId(m.id);
-                      setWizardStep(1);
-                      setShowWizard(true);
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-[#18181c] hover:bg-[#222226] border border-[#27272a] text-[11px] font-bold text-emerald-400 hover:border-emerald-500/50 cursor-pointer"
-                  >
-                    Run Model
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Live Model Execution & CUDA Output Console */}
-        <div className="space-y-3 pt-2">
+        {/* LIVE MODEL EXECUTION CONSOLE STREAM */}
+        <div className="space-y-3 pt-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-mono text-[#a1a1aa] uppercase tracking-wider font-bold flex items-center gap-2">
               <Terminal className="w-4 h-4 text-emerald-400" />
@@ -333,7 +497,7 @@ export function RunnerPage() {
             </span>
           </div>
 
-          <LiveConsoleLog maxHeight="max-h-[360px]" />
+          <LiveConsoleLog maxHeight="max-h-[380px]" />
         </div>
       </div>
 
@@ -349,12 +513,12 @@ export function RunnerPage() {
             >
               {/* Wizard Top Header */}
               <div className="p-4 border-b border-[#27272a] bg-[#18181c] flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                     <Sparkles className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-bold text-[#f4f4f5]">Model Launcher Wizard</h3>
+                    <h3 className="text-sm font-bold text-[#f4f4f5]">Model Execution Launcher Wizard</h3>
                     <p className="text-[10px] text-[#a1a1aa] font-mono">Step {wizardStep} of 4</p>
                   </div>
                 </div>
@@ -368,51 +532,78 @@ export function RunnerPage() {
                 </button>
               </div>
 
-              {/* Stepper Progress Bar */}
-              <div className="grid grid-cols-4 border-b border-[#27272a] text-[11px] font-mono bg-[#141418] shrink-0">
-                <div
-                  className={`p-2.5 text-center border-r border-[#27272a] ${
-                    wizardStep === 1 ? "bg-emerald-500/10 text-emerald-400 font-bold border-b-2 border-b-emerald-500" : "text-[#71717a]"
-                  }`}
-                >
-                  1. Select Model
-                </div>
-                <div
-                  className={`p-2.5 text-center border-r border-[#27272a] ${
-                    wizardStep === 2 ? "bg-emerald-500/10 text-emerald-400 font-bold border-b-2 border-b-emerald-500" : "text-[#71717a]"
-                  }`}
-                >
-                  2. Choose Engine
-                </div>
-                <div
-                  className={`p-2.5 text-center border-r border-[#27272a] ${
-                    wizardStep === 3 ? "bg-emerald-500/10 text-emerald-400 font-bold border-b-2 border-b-emerald-500" : "text-[#71717a]"
-                  }`}
-                >
-                  3. Memory Settings
-                </div>
-                <div
-                  className={`p-2.5 text-center ${
-                    wizardStep === 4 ? "bg-emerald-500/10 text-emerald-400 font-bold border-b-2 border-b-emerald-500" : "text-[#71717a]"
-                  }`}
-                >
-                  4. Launch Summary
-                </div>
+              {/* Wizard Step Progress Tracker */}
+              <div className="grid grid-cols-4 border-b border-[#27272a] bg-[#0c0c0e] text-[11px] font-mono shrink-0">
+                {[
+                  { step: 1, label: "Select Model" },
+                  { step: 2, label: "Execution Engine" },
+                  { step: 3, label: "Network & Port" },
+                  { step: 4, label: "Verify & Launch" },
+                ].map((s) => {
+                  const isActive = wizardStep === s.step;
+                  const isDone = wizardStep > s.step;
+
+                  return (
+                    <div
+                      key={s.step}
+                      className={`p-3 text-center border-r border-[#27272a] last:border-r-0 font-bold transition-all ${
+                        isActive
+                          ? "bg-[#18181c] text-emerald-400 border-b-2 border-b-emerald-500"
+                          : isDone
+                          ? "text-emerald-500/70"
+                          : "text-[#71717a]"
+                      }`}
+                    >
+                      {s.step}. {s.label}
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Wizard Content Step Body */}
-              <div className="p-6 overflow-y-auto flex-1 space-y-5">
-                {/* STEP 1: SELECT DOWNLOADED MODEL */}
+              {/* Wizard Content Body */}
+              <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-[#121215]">
+                {/* STEP 1: Select Model */}
                 {wizardStep === 1 && (
                   <div className="space-y-4">
-                    <h4 className="text-sm font-bold text-[#f4f4f5]">Step 1: Select Downloaded Model</h4>
-                    <p className="text-xs text-[#a1a1aa]">
-                      Showing ONLY real downloaded models currently stored in local disk (~/.m0x-flow/models).
-                    </p>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#f4f4f5]">Choose GGUF Model to Run</h4>
+                      <p className="text-xs text-[#a1a1aa]">Select an existing downloaded model file from local disk.</p>
+                    </div>
 
-                    {realModels.length === 0 ? (
+                    {realModels.length > 0 ? (
+                      <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1">
+                        {realModels.map((m) => {
+                          const isSelected = selectedModelId === m.id;
+
+                          return (
+                            <div
+                              key={m.id}
+                              onClick={() => setSelectedModelId(m.id)}
+                              className={`p-4 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                                isSelected
+                                  ? "bg-emerald-500/10 border-emerald-500 text-white"
+                                  : "bg-[#18181c] border-[#27272a] text-[#a1a1aa] hover:border-[#3f3f46]"
+                              }`}
+                            >
+                              <div className="space-y-1">
+                                <div className="text-xs font-bold text-[#f4f4f5]">{m.name}</div>
+                                <div className="text-[10px] font-mono text-[#71717a]">{m.id}</div>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] font-mono bg-[#121215] px-2 py-0.5 rounded border border-[#27272a] text-emerald-400">
+                                  {m.baseSizeGb} GB
+                                </span>
+                                {isSelected && <Check className="w-4 h-4 text-emerald-400" />}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
                       <div className="p-6 rounded-xl bg-[#18181c] border border-[#27272a] text-center space-y-3">
-                        <p className="text-xs text-[#a1a1aa]">No downloaded models found.</p>
+                        <Boxes className="w-8 h-8 text-[#71717a] mx-auto" />
+                        <p className="text-xs text-[#a1a1aa]">No downloaded model files found in your local storage directory.</p>
                         <button
                           type="button"
                           onClick={() => {
@@ -424,257 +615,183 @@ export function RunnerPage() {
                           Go to Model Hub to Download
                         </button>
                       </div>
-                    ) : (
-                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                        {realModels.map((m) => (
-                          <div
-                            key={m.id}
-                            onClick={() => setSelectedModelId(m.id)}
-                            className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-center justify-between ${
-                              selectedModelId === m.id
-                                ? "bg-emerald-500/10 border-emerald-500"
-                                : "bg-[#18181c] border-[#27272a] hover:border-[#3f3f46]"
-                            }`}
-                          >
-                            <div>
-                              <div className="text-xs font-bold text-[#f4f4f5]">{m.name}</div>
-                              <div className="text-[10px] font-mono text-[#71717a] mt-0.5">{m.id}</div>
-                            </div>
-                            {selectedModelId === m.id && (
-                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                            )}
-                          </div>
-                        ))}
-                      </div>
                     )}
                   </div>
                 )}
 
-                {/* STEP 2: CHOOSE ENGINE MODE */}
+                {/* STEP 2: Execution Engine */}
                 {wizardStep === 2 && (
                   <div className="space-y-4">
-                    <h4 className="text-sm font-bold text-[#f4f4f5]">Step 2: Select Execution Engine Mode</h4>
-                    <p className="text-xs text-[#a1a1aa]">
-                      Choose how the AI model weights will be scheduled and offloaded across hardware.
-                    </p>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#f4f4f5]">Select Execution Framework Engine</h4>
+                      <p className="text-xs text-[#a1a1aa]">Choose inference orchestration strategy for model execution.</p>
+                    </div>
 
                     <div className="space-y-3">
-                      {/* Standard Mode */}
-                      <div
-                        onClick={() => setEngineMode("standard")}
-                        className={`p-4 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
-                          engineMode === "standard" ? "bg-emerald-500/10 border-emerald-500" : "bg-[#18181c] border-[#27272a] hover:border-[#3f3f46]"
-                        }`}
-                      >
-                        <Cpu className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <h5 className="text-xs font-bold text-[#f4f4f5]">Standard (llama.cpp Engine)</h5>
-                              <span className="px-1.5 py-0.5 text-[9px] font-extrabold uppercase rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                                ⭐ Best Device Compatibility
-                              </span>
+                      {[
+                        {
+                          id: "standard",
+                          name: "Standard llama.cpp (CUDA GPU)",
+                          desc: "Native CUDA llama-server binary with 100% GPU layer offloading onto RTX 5080 VRAM.",
+                          badge: "Recommended • Best Performance",
+                          icon: Zap,
+                          iconColor: "text-emerald-400",
+                        },
+                        {
+                          id: "airllm",
+                          name: "AirLLM NVMe Streaming",
+                          desc: "Layer-by-layer NVMe VRAM offloading for 70B+ models on limited hardware.",
+                          badge: "Low VRAM Required",
+                          icon: HardDrive,
+                          iconColor: "text-blue-400",
+                        },
+                        {
+                          id: "exo",
+                          name: "Exo Pods Mesh Cluster",
+                          desc: "Distributed LAN memory-weighted cluster mesh network across multiple devices.",
+                          badge: "P2P Mesh",
+                          icon: Network,
+                          iconColor: "text-purple-400",
+                        },
+                      ].map((item) => {
+                        const isSelected = engineMode === item.id;
+                        const Icon = item.icon;
+
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => setEngineMode(item.id as any)}
+                            className={`p-4 rounded-xl border transition-all cursor-pointer flex items-start gap-3 ${
+                              isSelected
+                                ? "bg-emerald-500/10 border-emerald-500 text-white"
+                                : "bg-[#18181c] border-[#27272a] text-[#a1a1aa] hover:border-[#3f3f46]"
+                            }`}
+                          >
+                            <div className={`p-2 rounded-lg bg-[#121215] border border-[#27272a] ${item.iconColor} shrink-0 mt-0.5`}>
+                              <Icon className="w-4 h-4" />
                             </div>
-                            {engineMode === "standard" && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                          </div>
-                          <p className="text-[11px] text-[#a1a1aa] mt-1">
-                            Direct GPU/CPU KV cache execution. Universal native support for Windows, macOS (Metal), Linux, NVIDIA (CUDA), AMD (Vulkan), and Intel GPUs.
-                          </p>
-                        </div>
-                      </div>
 
-                      {/* AirLLM Mode */}
-                      <div
-                        onClick={() => setEngineMode("airllm")}
-                        className={`p-4 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
-                          engineMode === "airllm" ? "bg-emerald-500/10 border-emerald-500" : "bg-[#18181c] border-[#27272a] hover:border-[#3f3f46]"
-                        }`}
-                      >
-                        <HardDrive className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <h5 className="text-xs font-bold text-[#f4f4f5]">AirLLM Layer Streaming</h5>
-                            {engineMode === "airllm" && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                            <div className="flex-1 space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-[#f4f4f5]">{item.name}</span>
+                                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                  {item.badge}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-[#a1a1aa]">{item.desc}</p>
+                            </div>
                           </div>
-                          <p className="text-[11px] text-[#a1a1aa] mt-1">
-                            Streams weights layer-by-layer from NVMe storage into 4GB VRAM. Fits 70B+ models on small GPUs.
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Exo Pods Mode */}
-                      <div
-                        onClick={() => setEngineMode("exo")}
-                        className={`p-4 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
-                          engineMode === "exo" ? "bg-emerald-500/10 border-emerald-500" : "bg-[#18181c] border-[#27272a] hover:border-[#3f3f46]"
-                        }`}
-                      >
-                        <Network className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <h5 className="text-xs font-bold text-[#f4f4f5]">Exo Pods Mesh Cluster</h5>
-                            {engineMode === "exo" && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                          </div>
-                          <p className="text-[11px] text-[#a1a1aa] mt-1">
-                            Pools VRAM across local Wi-Fi & LAN devices into a unified computing mesh.
-                          </p>
-                        </div>
-                      </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
-                {/* STEP 3: CONFIGURE MEMORY & HARDWARE PARAMETERS */}
+                {/* STEP 3: Network & Port Configuration */}
                 {wizardStep === 3 && (
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-bold text-[#f4f4f5]">Step 3: Tune Memory & Hardware Parameters</h4>
-                      <div className="text-xs font-mono text-[#a1a1aa]">
-                        Est. GPU: <span className="text-emerald-400 font-bold">{memoryEstimate.gpuVram} GB</span> | Total: <span className="text-[#f4f4f5] font-bold">{memoryEstimate.totalMem} GB</span>
-                      </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#f4f4f5]">Network & Access Mode Configuration</h4>
+                      <p className="text-xs text-[#a1a1aa]">Review target endpoint Base URL and configure GPU VRAM offloading.</p>
                     </div>
 
-                    <div className="space-y-4 text-xs">
-                      {/* Context Length Slider */}
-                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="font-bold text-[#f4f4f5]">Context Length</span>
-                          <input
-                            type="number"
-                            value={config.contextLength}
-                            onChange={(e) => handleNumberChange("contextLength", parseInt(e.target.value) || 2048)}
-                            className="bg-[#121215] border border-[#27272a] text-[#f4f4f5] px-2 py-1 rounded font-mono font-bold w-24 text-right"
-                          />
+                    <div className="space-y-4">
+                      {/* Port & Access Mode Display Info */}
+                      <div className="p-4 rounded-xl bg-[#18181c] border border-[#27272a] space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-xs font-bold text-[#f4f4f5] block">Hosting Access Mode</span>
+                            <span className="text-xs font-mono text-emerald-400 font-bold mt-0.5 uppercase block">
+                              {accessMode === "cloudflare" ? "⚡ Cloudflare Tunnel (Worldwide)" : accessMode === "lan" ? "📶 Local Network & Wi-Fi" : "🔒 Localhost (127.0.0.1)"}
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-mono text-[#a1a1aa] bg-[#121215] px-2.5 py-1 rounded-lg border border-[#27272a] font-bold">
+                            Port {hostingPort}
+                          </span>
                         </div>
-                        <input
-                          type="range"
-                          min={2048}
-                          max={131072}
-                          step={2048}
-                          value={config.contextLength}
-                          onChange={(e) => handleNumberChange("contextLength", parseInt(e.target.value))}
-                          className="w-full h-1.5 bg-[#121215] rounded appearance-none cursor-pointer accent-blue-500"
-                        />
+
+                        <div className="pt-2 border-t border-[#27272a] flex items-center justify-between text-xs font-mono">
+                          <span className="text-[#a1a1aa]">Endpoint Base URL:</span>
+                          <span className="text-blue-400 font-bold">
+                            {accessMode === "cloudflare"
+                              ? (activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "Connecting Cloudflare Tunnel...")
+                              : accessMode === "lan"
+                              ? `http://${lanIp}:${hostingPort}/v1`
+                              : `http://127.0.0.1:${hostingPort}/v1`}
+                          </span>
+                        </div>
                       </div>
 
                       {/* GPU Offload Slider */}
-                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="font-bold text-[#f4f4f5]">GPU Offload Layers</span>
-                          <input
-                            type="number"
-                            value={config.gpuOffloadLayers}
-                            onChange={(e) => handleNumberChange("gpuOffloadLayers", parseInt(e.target.value) || 0)}
-                            className="bg-[#121215] border border-[#27272a] text-[#f4f4f5] px-2 py-1 rounded font-mono font-bold w-16 text-right"
-                          />
+                      <div className="p-4 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-[#f4f4f5]">GPU Offload Layers (-ngl)</span>
+                          <span className="font-mono text-emerald-400 font-bold">{config.gpuOffloadLayers} Layers</span>
                         </div>
                         <input
                           type="range"
                           min={0}
-                          max={40}
+                          max={99}
                           value={config.gpuOffloadLayers}
-                          onChange={(e) => handleNumberChange("gpuOffloadLayers", parseInt(e.target.value))}
-                          className="w-full h-1.5 bg-[#121215] rounded appearance-none cursor-pointer accent-blue-500"
+                          onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value))}
+                          className="w-full accent-emerald-500 cursor-pointer"
                         />
-                      </div>
-
-                      {/* Toggles & Options */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="flex items-center justify-between p-3 rounded-xl bg-[#18181c] border border-[#27272a]">
-                          <span className="font-bold text-[#f4f4f5]">Flash Attention</span>
-                          <input
-                            type="checkbox"
-                            checked={config.flashAttention}
-                            onChange={() => handleToggleOption("flashAttention")}
-                            className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between p-3 rounded-xl bg-[#18181c] border border-[#27272a]">
-                          <span className="font-bold text-[#f4f4f5]">Try mmap()</span>
-                          <input
-                            type="checkbox"
-                            checked={config.tryMmap}
-                            onChange={() => handleToggleOption("tryMmap")}
-                            className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-                          />
-                        </div>
-                      </div>
-
-                      {/* KV Cache Quantization Types */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="font-bold text-[#f4f4f5] block mb-1">K Cache Quantization</label>
-                          <select
-                            value={config.kCacheQuantType}
-                            onChange={(e) => setConfig((prev) => ({ ...prev, kCacheQuantType: e.target.value as any }))}
-                            className="w-full bg-[#18181c] border border-[#27272a] text-[#f4f4f5] px-3 py-2 rounded-xl font-mono"
-                          >
-                            <option value="Q4_0">Q4_0 (Recommended)</option>
-                            <option value="Q8_0">Q8_0 (High Precision)</option>
-                            <option value="F16">F16 (Full Precision)</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="font-bold text-[#f4f4f5] block mb-1">V Cache Quantization</label>
-                          <select
-                            value={config.vCacheQuantType}
-                            onChange={(e) => setConfig((prev) => ({ ...prev, vCacheQuantType: e.target.value as any }))}
-                            className="w-full bg-[#18181c] border border-[#27272a] text-[#f4f4f5] px-3 py-2 rounded-xl font-mono"
-                          >
-                            <option value="Q4_0">Q4_0 (Recommended)</option>
-                            <option value="Q8_0">Q8_0 (High Precision)</option>
-                            <option value="F16">F16 (Full Precision)</option>
-                          </select>
-                        </div>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* STEP 4: CONFIRMATION & LAUNCH SUMMARY */}
+                {/* STEP 4: Verify & Launch */}
                 {wizardStep === 4 && (
                   <div className="space-y-4">
-                    <h4 className="text-sm font-bold text-[#f4f4f5]">Step 4: Confirmation & Launch Summary</h4>
-                    <p className="text-xs text-[#a1a1aa]">Review your configuration before initializing the engine.</p>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#f4f4f5]">Verify Parameters & Execute</h4>
+                      <p className="text-xs text-[#a1a1aa]">Confirm configuration before initializing GPU memory allocation.</p>
+                    </div>
 
                     <div className="p-4 rounded-xl bg-[#18181c] border border-[#27272a] space-y-3 text-xs font-mono">
-                      <div className="flex justify-between pb-2 border-b border-[#27272a]">
-                        <span className="text-[#a1a1aa]">Selected Model:</span>
-                        <span className="text-[#f4f4f5] font-bold">{activeModel?.name}</span>
-                      </div>
-                      <div className="flex justify-between pb-2 border-b border-[#27272a]">
-                        <span className="text-[#a1a1aa]">Engine Mode:</span>
-                        <span className="text-[#f4f4f5] font-bold uppercase">{engineMode}</span>
-                      </div>
-                      <div className="flex justify-between pb-2 border-b border-[#27272a]">
-                        <span className="text-[#a1a1aa]">Context Length:</span>
-                        <span className="text-[#f4f4f5] font-bold">{config.contextLength} tokens</span>
-                      </div>
-                      <div className="flex justify-between pb-2 border-b border-[#27272a]">
-                        <span className="text-[#a1a1aa]">Offloaded Layers:</span>
-                        <span className="text-[#f4f4f5] font-bold">{config.gpuOffloadLayers} layers</span>
+                      <div className="flex justify-between">
+                        <span className="text-[#a1a1aa] font-sans">Model:</span>
+                        <span className="font-bold text-[#f4f4f5]">{activeModel?.name || "Selected Model"}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-[#a1a1aa]">Est. Memory Usage:</span>
-                        <span className="text-emerald-400 font-bold">GPU: {memoryEstimate.gpuVram} GB | Total: {memoryEstimate.totalMem} GB</span>
+                        <span className="text-[#a1a1aa] font-sans">Engine:</span>
+                        <span className="font-bold text-emerald-400">{engineMode.toUpperCase()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#a1a1aa] font-sans">Access Mode:</span>
+                        <span className="font-bold uppercase text-amber-400">{accessMode}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#a1a1aa] font-sans">Base URL:</span>
+                        <span className="font-bold text-blue-400">
+                          {accessMode === "cloudflare"
+                            ? `${activeCloudflareUrl || "https://m0x-flow.trycloudflare.com"}/v1`
+                            : accessMode === "lan"
+                            ? `http://${lanIp}:${hostingPort}/v1`
+                            : `http://127.0.0.1:${hostingPort}/v1`}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#a1a1aa] font-sans">Offload Layers:</span>
+                        <span className="font-bold text-[#f4f4f5]">{config.gpuOffloadLayers} Layers</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#a1a1aa] font-sans">Estimated VRAM / RAM:</span>
+                        <span className="font-bold text-emerald-400">{memoryEstimate.gpuVram} GB VRAM / {memoryEstimate.totalMem} GB RAM</span>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Wizard Bottom Nav Bar */}
+              {/* Wizard Footer Nav Buttons */}
               <div className="p-4 border-t border-[#27272a] bg-[#18181c] flex items-center justify-between shrink-0">
                 <button
                   type="button"
-                  disabled={wizardStep === 1}
                   onClick={() => setWizardStep((prev) => Math.max(1, prev - 1) as any)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
-                    wizardStep > 1
-                      ? "bg-[#222226] text-[#f4f4f5] border-[#3f3f46] hover:bg-[#2a2a30] cursor-pointer"
-                      : "bg-[#141418] text-[#71717a] border-[#27272a] cursor-not-allowed opacity-50"
-                  }`}
+                  disabled={wizardStep === 1}
+                  className="px-4 py-2 rounded-xl bg-[#121215] border border-[#27272a] text-xs font-bold text-[#a1a1aa] hover:text-white disabled:opacity-50 cursor-pointer flex items-center gap-1"
                 >
                   <ChevronLeft className="w-4 h-4" /> Back
                 </button>
@@ -682,9 +799,9 @@ export function RunnerPage() {
                 {wizardStep < 4 ? (
                   <button
                     type="button"
-                    disabled={realModels.length === 0}
                     onClick={() => setWizardStep((prev) => Math.min(4, prev + 1) as any)}
-                    className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all border border-blue-500 flex items-center gap-1.5 cursor-pointer shadow-lg shadow-blue-950/40"
+                    disabled={wizardStep === 1 && realModels.length === 0}
+                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
                   >
                     Next <ChevronRight className="w-4 h-4" />
                   </button>
@@ -692,9 +809,10 @@ export function RunnerPage() {
                   <button
                     type="button"
                     onClick={handleLaunchModel}
-                    className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all border border-emerald-500 flex items-center gap-2 cursor-pointer shadow-xl shadow-emerald-950/40"
+                    disabled={!activeModel}
+                    className="px-6 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold transition-all shadow-lg shadow-emerald-600/30 cursor-pointer flex items-center gap-2 disabled:opacity-50"
                   >
-                    <Play className="w-4 h-4 fill-current" /> Load & Launch Model
+                    <Zap className="w-4 h-4" /> Launch Model on Port {hostingPort}
                   </button>
                 )}
               </div>

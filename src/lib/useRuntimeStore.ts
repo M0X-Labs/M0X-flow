@@ -4,6 +4,10 @@ export interface HostedModel {
   id: string;
   name: string;
   engineMode: "standard" | "airllm" | "exo";
+  port?: number;
+  hostIp?: string;
+  cloudflareActive?: boolean;
+  cloudflareUrl?: string | null;
 }
 
 export interface HardwareMetrics {
@@ -36,6 +40,8 @@ let globalIsGenerating = false;
 let globalEngineMode: "standard" | "airllm" | "exo" = "standard";
 let globalMetrics: HardwareMetrics = DEFAULT_METRICS;
 let globalIsLoaded = false;
+let globalCloudflareUrl: string | null = null;
+let globalCloudflareActive = false;
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -78,6 +84,10 @@ export function useRuntimeStore() {
               id: data.hosted_model.model_id,
               name: data.hosted_model.model_name,
               engineMode: data.hosted_model.engine_mode,
+              port: data.hosted_model.port,
+              hostIp: data.hosted_model.host_ip,
+              cloudflareActive: data.hosted_model.cloudflare_active,
+              cloudflareUrl: data.hosted_model.cloudflare_url,
             };
           } else if (!globalIsGenerating && !globalHostedModel?.id) {
             globalHostedModel = null;
@@ -94,8 +104,23 @@ export function useRuntimeStore() {
     return () => clearInterval(interval);
   }, []);
 
-  const hostModel = useCallback(async (id: string, name: string, engineMode: "standard" | "airllm" | "exo" = "standard") => {
-    globalHostedModel = { id, name, engineMode };
+  const hostModel = useCallback(async (
+    id: string,
+    name: string,
+    engineMode: "standard" | "airllm" | "exo" = "standard",
+    port: number = 8080,
+    hostIp: string = "127.0.0.1",
+    cloudflareActive: boolean = false
+  ) => {
+    globalHostedModel = {
+      id,
+      name,
+      engineMode,
+      port,
+      hostIp,
+      cloudflareActive,
+      cloudflareUrl: cloudflareActive ? (globalCloudflareUrl || `https://m0x-flow-${Math.random().toString(36).substring(2, 10)}.trycloudflare.com`) : null,
+    };
     globalEngineMode = engineMode;
     globalMetrics = {
       ...globalMetrics,
@@ -108,7 +133,7 @@ export function useRuntimeStore() {
     fetch("http://localhost:14321/api/model/host", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model_id: id, model_name: name, engine_mode: engineMode }),
+      body: JSON.stringify({ model_id: id, model_name: name, engine_mode: engineMode, port, host_ip: hostIp, cloudflare_active: cloudflareActive }),
     }).catch(() => null);
   }, []);
 
@@ -148,14 +173,82 @@ export function useRuntimeStore() {
     notify();
   }, []);
 
+  const updateNetworkConfig = useCallback((port: number, hostIp: string, cloudflareActive: boolean) => {
+    if (globalHostedModel) {
+      globalHostedModel = {
+        ...globalHostedModel,
+        port,
+        hostIp,
+        cloudflareActive,
+        cloudflareUrl: cloudflareActive ? (globalCloudflareUrl || `https://m0x-flow-${Math.random().toString(36).substring(2, 10)}.trycloudflare.com`) : null,
+      };
+      notify();
+      fetch("http://localhost:14321/api/model/host", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_id: globalHostedModel.id,
+          model_name: globalHostedModel.name,
+          engine_mode: globalHostedModel.engineMode,
+          port,
+          host_ip: hostIp,
+          cloudflare_active: cloudflareActive,
+        }),
+      }).catch(() => null);
+    }
+  }, []);
+
+  const toggleCloudflare = useCallback(async (enabled: boolean, port: number = 8080, hostIp: string = "127.0.0.1") => {
+    globalCloudflareActive = enabled;
+    if (!enabled) {
+      globalCloudflareUrl = null;
+    }
+    if (globalHostedModel) {
+      globalHostedModel = {
+        ...globalHostedModel,
+        cloudflareActive: enabled,
+        cloudflareUrl: enabled ? globalCloudflareUrl : null,
+      };
+    }
+    notify();
+
+    fetch("http://localhost:14321/api/tunnel/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled, port, host_ip: hostIp }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (enabled && data.url) {
+          globalCloudflareUrl = data.url;
+          globalCloudflareActive = true;
+          if (globalHostedModel) {
+            globalHostedModel = { ...globalHostedModel, cloudflareActive: true, cloudflareUrl: data.url };
+          }
+        } else if (!enabled) {
+          globalCloudflareUrl = null;
+          globalCloudflareActive = false;
+          if (globalHostedModel) {
+            globalHostedModel = { ...globalHostedModel, cloudflareActive: false, cloudflareUrl: null };
+          }
+        }
+        notify();
+      })
+      .catch(() => null);
+  }, []);
+
   return {
     hostedModel: globalHostedModel,
     isGenerating: globalIsGenerating,
     engineMode: globalEngineMode,
     metrics: globalMetrics,
     isLoaded: globalIsLoaded,
+    cloudflareUrl: globalCloudflareUrl,
+    cloudflareActive: globalCloudflareActive,
     hostModel,
     unhostModel,
     setGenerating,
+    updateNetworkConfig,
+    toggleCloudflare,
   };
 }

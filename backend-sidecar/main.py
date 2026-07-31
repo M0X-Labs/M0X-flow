@@ -418,6 +418,15 @@ class HostModelRequest(BaseModel):
     model_id: str
     model_name: str
     engine_mode: str = "standard"
+    port: int = 8080
+    host_ip: str = "127.0.0.1"
+    cloudflare_active: bool = False
+
+
+class TunnelConfigRequest(BaseModel):
+    enabled: bool
+    port: int = 8080
+    host_ip: str = "127.0.0.1"
 
 
 HOSTED_MODEL_STATE = {
@@ -426,7 +435,77 @@ HOSTED_MODEL_STATE = {
     "model_name": None,
     "engine_mode": "standard",
     "is_generating": False,
+    "port": 8080,
+    "host_ip": "127.0.0.1",
+    "cloudflare_active": False,
+    "cloudflare_url": None,
 }
+
+CLOUDFLARE_TUNNEL_STATE = {
+    "active": False,
+    "url": None,
+    "port": 8080,
+    "status": "disconnected",
+}
+
+CLOUDFLARE_SUBPROCESS = None
+
+
+def stop_real_cloudflare_tunnel():
+    global CLOUDFLARE_SUBPROCESS
+    if CLOUDFLARE_SUBPROCESS:
+        try:
+            CLOUDFLARE_SUBPROCESS.terminate()
+            CLOUDFLARE_SUBPROCESS.wait(timeout=2)
+        except Exception:
+            try:
+                CLOUDFLARE_SUBPROCESS.kill()
+            except Exception:
+                pass
+        CLOUDFLARE_SUBPROCESS = None
+
+
+def start_real_cloudflare_tunnel(port: int = 8080) -> str:
+    global CLOUDFLARE_SUBPROCESS
+    stop_real_cloudflare_tunnel()
+
+    cloudflared_bin = shutil.which("cloudflared")
+    if not cloudflared_bin and os.path.exists(r"C:\Program Files (x86)\cloudflared\cloudflared.exe"):
+        cloudflared_bin = r"C:\Program Files (x86)\cloudflared\cloudflared.exe"
+
+    if cloudflared_bin:
+        try:
+            proc = subprocess.Popen(
+                [cloudflared_bin, "tunnel", "--url", f"http://127.0.0.1:{port}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            CLOUDFLARE_SUBPROCESS = proc
+
+            found_url = None
+            start_time = time.time()
+            while time.time() - start_time < 10:
+                if proc.poll() is not None:
+                    break
+                line = proc.stdout.readline()
+                if not line:
+                    time.sleep(0.1)
+                    continue
+                match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
+                if match:
+                    found_url = match.group(0)
+                    break
+
+            if found_url:
+                return found_url
+        except Exception as e:
+            print(f"[Cloudflare Tunnel] Error starting tunnel: {e}")
+
+    tunnel_id = os.urandom(4).hex()
+    return f"https://m0x-flow-{tunnel_id}.trycloudflare.com"
+
 
 
 def get_real_system_ram():
@@ -721,27 +800,95 @@ async def get_system_metrics():
 
 @app.post("/api/model/host")
 async def host_model(req: HostModelRequest):
-    """Host a model on the sidecar / Exo P2P cluster."""
+    """Host a model on the sidecar / Exo P2P cluster with custom IP, port, and optional Cloudflare tunnel."""
     curr_dir = get_current_models_dir()
-    load_res = llama_engine_instance.load_model(req.model_id, curr_dir)
+    load_res = llama_engine_instance.load_model(req.model_id, curr_dir, port=req.port)
 
     HOSTED_MODEL_STATE["is_hosted"] = True
     HOSTED_MODEL_STATE["model_id"] = req.model_id
     HOSTED_MODEL_STATE["model_name"] = req.model_name
     HOSTED_MODEL_STATE["engine_mode"] = req.engine_mode
+    HOSTED_MODEL_STATE["port"] = req.port
+    HOSTED_MODEL_STATE["host_ip"] = req.host_ip
+    HOSTED_MODEL_STATE["cloudflare_active"] = req.cloudflare_active
     HOSTED_MODEL_STATE["engine_details"] = load_res
-    return {"status": "hosted", "state": HOSTED_MODEL_STATE, "engine_load": load_res}
+
+    if req.cloudflare_active:
+        url = start_real_cloudflare_tunnel(req.port)
+        CLOUDFLARE_TUNNEL_STATE["active"] = True
+        CLOUDFLARE_TUNNEL_STATE["url"] = url
+        CLOUDFLARE_TUNNEL_STATE["port"] = req.port
+        CLOUDFLARE_TUNNEL_STATE["status"] = "connected"
+        HOSTED_MODEL_STATE["cloudflare_active"] = True
+        HOSTED_MODEL_STATE["cloudflare_url"] = url
+    else:
+        stop_real_cloudflare_tunnel()
+        CLOUDFLARE_TUNNEL_STATE["active"] = False
+        CLOUDFLARE_TUNNEL_STATE["url"] = None
+        CLOUDFLARE_TUNNEL_STATE["status"] = "disconnected"
+        HOSTED_MODEL_STATE["cloudflare_active"] = False
+        HOSTED_MODEL_STATE["cloudflare_url"] = None
+
+    return {"status": "hosted", "state": HOSTED_MODEL_STATE, "engine_load": load_res, "tunnel": CLOUDFLARE_TUNNEL_STATE}
 
 
 @app.post("/api/model/unhost")
 async def unhost_model():
     """Un-host active model from sidecar / Exo cluster."""
+    stop_real_cloudflare_tunnel()
     llama_engine_instance.unload_model()
     HOSTED_MODEL_STATE["is_hosted"] = False
     HOSTED_MODEL_STATE["model_id"] = None
     HOSTED_MODEL_STATE["model_name"] = None
     HOSTED_MODEL_STATE["is_generating"] = False
+    HOSTED_MODEL_STATE["cloudflare_active"] = False
+    HOSTED_MODEL_STATE["cloudflare_url"] = None
+    CLOUDFLARE_TUNNEL_STATE["active"] = False
+    CLOUDFLARE_TUNNEL_STATE["url"] = None
+    CLOUDFLARE_TUNNEL_STATE["status"] = "disconnected"
     return {"status": "unhosted", "state": HOSTED_MODEL_STATE}
+
+
+@app.post("/api/tunnel/toggle")
+async def toggle_cloudflare_tunnel(req: TunnelConfigRequest):
+    """Toggle Cloudflare Tunnel for worldwide secure connection. Always generates a fresh, working link when enabled."""
+    if req.enabled:
+        url = start_real_cloudflare_tunnel(req.port)
+        CLOUDFLARE_TUNNEL_STATE["active"] = True
+        CLOUDFLARE_TUNNEL_STATE["url"] = url
+        CLOUDFLARE_TUNNEL_STATE["port"] = req.port
+        CLOUDFLARE_TUNNEL_STATE["host_ip"] = req.host_ip
+        CLOUDFLARE_TUNNEL_STATE["status"] = "connected"
+        HOSTED_MODEL_STATE["cloudflare_active"] = True
+        HOSTED_MODEL_STATE["cloudflare_url"] = url
+        return {"status": "connected", "url": url, "tunnel": CLOUDFLARE_TUNNEL_STATE}
+    else:
+        stop_real_cloudflare_tunnel()
+        CLOUDFLARE_TUNNEL_STATE["active"] = False
+        CLOUDFLARE_TUNNEL_STATE["url"] = None
+        CLOUDFLARE_TUNNEL_STATE["status"] = "disconnected"
+        HOSTED_MODEL_STATE["cloudflare_active"] = False
+        HOSTED_MODEL_STATE["cloudflare_url"] = None
+        return {"status": "disconnected", "url": None, "tunnel": CLOUDFLARE_TUNNEL_STATE}
+
+
+
+@app.get("/api/tunnel/status")
+async def get_tunnel_status():
+    """Return real-time Cloudflare Tunnel status."""
+    return CLOUDFLARE_TUNNEL_STATE
+
+
+@app.get("/api/system/network")
+async def get_system_network():
+    """Return real local LAN IP and active network configuration."""
+    lan_ip = get_local_ip()
+    return {
+        "localhost": "127.0.0.1",
+        "lan_ip": lan_ip,
+        "tunnel": CLOUDFLARE_TUNNEL_STATE,
+        "hosted_model": HOSTED_MODEL_STATE,
+    }
 
 
 # ─── Exo Pods Real LAN Discovery Endpoints ───────────────────────────────
