@@ -4,8 +4,11 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 
 # AI Inference Engines
+llama-cpp-python>=0.2.80
 airllm
 exo-explore
 
-# Model Management
+# Model Management & Hardware Diagnostics
 huggingface_hub
+psutil
+

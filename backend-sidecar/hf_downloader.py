@@ -1,17 +1,24 @@
 """
-Hugging Face Real Model Downloader Module for m0x Flow Sidecar.
-Handles real streaming file downloads from Hugging Face Hub with progress and speed tracking.
+Hugging Face Real Model Downloader Module for m0x-flow Sidecar.
+Handles real streaming file downloads from Hugging Face Hub with progress tracking.
 """
 
 import os
 import sys
 import time
 import json
+import shutil
 import urllib.request
 import urllib.error
 import threading
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+try:
+    from huggingface_hub import hf_hub_download
+    HF_HUB_AVAILABLE = True
+except ImportError:
+    HF_HUB_AVAILABLE = False
 
 DOWNLOAD_JOBS: Dict[str, Dict[str, Any]] = {}
 CANCEL_REQUESTS: Dict[str, bool] = {}
@@ -23,7 +30,7 @@ def get_hf_model_files(model_id: str) -> list:
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "m0x-flow/0.1 (HuggingFace Hub Downloader)",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) m0x-flow/0.1",
             "Accept": "application/json",
         },
     )
@@ -42,33 +49,25 @@ def select_download_target_file(model_id: str, quantization: str, files: list) -
     Select best target file to download based on model type and quantization variant.
     Returns (filename, is_gguf).
     """
-    repo_lower = model_id.lower()
     quant_clean = quantization.strip().lower().replace("-", "_")
 
     # Look for GGUF files
     gguf_files = [f for f in files if f.endswith(".gguf")]
     if gguf_files:
-        # First priority: Match requested quantization string in filename
         for f in gguf_files:
-            f_lower = f.lower().replace("-", "_")
-            if quant_clean in f_lower:
+            if quant_clean in f.lower().replace("-", "_"):
                 return f, True
-
-        # Second priority: Match quantization keys like q4, q5, q8, iq4, etc.
         for key in ["q4_k_m", "q4_k_s", "q4", "iq4", "q5_k_m", "q5", "q8_0", "q8", "iq2", "iq3", "bf16"]:
             if key in quant_clean:
                 for f in gguf_files:
                     if key in f.lower().replace("-", "_"):
                         return f, True
-
         return gguf_files[0], True
 
-    # Safetensors / PyTorch repository
     safetensors_files = [f for f in files if f.endswith(".safetensors")]
     if safetensors_files:
         return safetensors_files[0], False
 
-    # Default to config or main model weight file
     if files:
         return files[0], False
 
@@ -98,28 +97,40 @@ def execute_download_worker(model_id: str, quantization: str, dest_dir: Path):
         files = get_hf_model_files(model_id)
         target_file, is_gguf = select_download_target_file(model_id, quantization, files)
         filename_only = target_file.split("/")[-1]
-
-        download_url = f"https://huggingface.co/{model_id}/resolve/main/{target_file}"
         save_file_path = model_path / filename_only
 
-        req = urllib.request.Request(
-            download_url,
-            headers={"User-Agent": "m0x-flow/0.1 (HuggingFace Hub Downloader)"},
-        )
+        DOWNLOAD_JOBS[model_id]["file_name"] = filename_only
 
-        print(f"[m0x-sidecar] Downloading HF file: {download_url} -> {save_file_path}", flush=True)
+        # Method A: Use huggingface_hub for resilient download if available
+        if HF_HUB_AVAILABLE and is_gguf:
+            print(f"[m0x-sidecar] Downloading via huggingface_hub: {model_id}/{target_file}", flush=True)
+            DOWNLOAD_JOBS[model_id]["speed"] = "Downloading..."
+            DOWNLOAD_JOBS[model_id]["progress"] = 30.0
 
-        try:
-            resp = urllib.request.urlopen(req, timeout=15)
+            dl_path = hf_hub_download(repo_id=model_id, filename=target_file)
+            shutil.copy(dl_path, save_file_path)
+
+            file_size = save_file_path.stat().st_size
+            DOWNLOAD_JOBS[model_id]["downloaded_bytes"] = file_size
+            DOWNLOAD_JOBS[model_id]["total_bytes"] = file_size
+        else:
+            # Method B: HTTP Streaming Download with User-Agent & Redirect Handling
+            download_url = f"https://huggingface.co/{model_id}/resolve/main/{target_file}"
+            print(f"[m0x-sidecar] Downloading HTTP stream: {download_url} -> {save_file_path}", flush=True)
+
+            req = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) m0x-flow/0.1"},
+            )
+
+            resp = urllib.request.urlopen(req, timeout=30)
             content_length = resp.headers.get("Content-Length")
-            total_bytes = int(content_length) if content_length and content_length.isdigit() else 4 * 1024 * 1024 * 1024
+            total_bytes = int(content_length) if content_length and content_length.isdigit() else 500 * 1024 * 1024
 
             DOWNLOAD_JOBS[model_id]["total_bytes"] = total_bytes
-            DOWNLOAD_JOBS[model_id]["file_name"] = filename_only
-
             downloaded_bytes = 0
             start_time = time.time()
-            chunk_size = 1024 * 1024  # 1MB chunks
+            chunk_size = 2 * 1024 * 1024  # 2MB chunks
 
             with open(save_file_path, "wb") as f_out:
                 while True:
@@ -145,34 +156,6 @@ def execute_download_worker(model_id: str, quantization: str, dest_dir: Path):
                     DOWNLOAD_JOBS[model_id]["downloaded_bytes"] = downloaded_bytes
                     DOWNLOAD_JOBS[model_id]["progress"] = pct
                     DOWNLOAD_JOBS[model_id]["speed"] = f"{speed_mbps:.1f} MB/s"
-
-        except Exception as http_err:
-            print(f"[m0x-sidecar] Real stream download note: {http_err}. Simulating download progression.", flush=True)
-            # Simulated chunk progression for offline/rate-limited environments
-            sim_total = 4 * 1024 * 1024 * 1024
-            DOWNLOAD_JOBS[model_id]["total_bytes"] = sim_total
-            DOWNLOAD_JOBS[model_id]["file_name"] = f"{model_id.split('/')[-1]}-{quantization.lower()}.gguf"
-
-            dummy_file = model_path / DOWNLOAD_JOBS[model_id]["file_name"]
-            sim_bytes = 0
-            start_time = time.time()
-
-            with open(dummy_file, "wb") as f_out:
-                while sim_bytes < sim_total:
-                    if CANCEL_REQUESTS.get(model_id, False):
-                        DOWNLOAD_JOBS[model_id]["status"] = "cancelled"
-                        return
-                    time.sleep(0.3)
-                    chunk_len = 100 * 1024 * 1024
-                    f_out.write(os.urandom(1024))  # write marker bytes
-                    sim_bytes += chunk_len
-                    elapsed = time.time() - start_time
-                    speed = (sim_bytes / (1024 * 1024)) / elapsed if elapsed > 0 else 25.0
-                    pct = min(round((sim_bytes / sim_total) * 100, 1), 99.9)
-
-                    DOWNLOAD_JOBS[model_id]["downloaded_bytes"] = sim_bytes
-                    DOWNLOAD_JOBS[model_id]["progress"] = pct
-                    DOWNLOAD_JOBS[model_id]["speed"] = f"{speed:.1f} MB/s"
 
         # Write ready model_info.json marker
         info_file = model_path / "model_info.json"
@@ -200,43 +183,25 @@ def execute_download_worker(model_id: str, quantization: str, dest_dir: Path):
         DOWNLOAD_JOBS[model_id]["error"] = str(e)
 
 
-def trigger_hf_download(model_id: str, quantization: str, dest_dir: Path) -> dict:
-    """Start or retrieve an active Hugging Face download job."""
-    existing = DOWNLOAD_JOBS.get(model_id)
-    if existing and existing.get("status") == "downloading":
-        return existing
-
+def trigger_hf_download(model_id: str, quantization: str, dest_dir: Path) -> Dict[str, Any]:
+    """Start background download thread for a given model repository."""
     t = threading.Thread(
         target=execute_download_worker,
         args=(model_id, quantization, dest_dir),
         daemon=True,
     )
     t.start()
-
-    return {
-        "model_id": model_id,
-        "status": "downloading",
-        "progress": 0.0,
-        "speed": "Starting...",
-    }
+    return {"model_id": model_id, "quantization": quantization, "status": "started"}
 
 
-def get_download_status(model_id: str) -> dict:
-    """Return status of an active or recent download job."""
-    job = DOWNLOAD_JOBS.get(model_id)
-    if job:
-        return job
-    return {
-        "model_id": model_id,
-        "status": "not_started",
-        "progress": 0.0,
-        "speed": "0 MB/s",
-    }
-
-
-def cancel_hf_download(model_id: str) -> dict:
-    """Cancel active download job."""
-    CANCEL_REQUESTS[model_id] = True
+def get_download_status(model_id: str) -> Dict[str, Any]:
+    """Return real-time download status for a given model ID."""
     if model_id in DOWNLOAD_JOBS:
-        DOWNLOAD_JOBS[model_id]["status"] = "cancelling"
-    return {"status": "cancelling", "model_id": model_id}
+        return DOWNLOAD_JOBS[model_id]
+    return {"model_id": model_id, "status": "not_started", "progress": 0.0, "speed": "0 MB/s"}
+
+
+def cancel_hf_download(model_id: str) -> Dict[str, Any]:
+    """Flag a download job for cancellation."""
+    CANCEL_REQUESTS[model_id] = True
+    return {"model_id": model_id, "status": "cancellation_requested"}

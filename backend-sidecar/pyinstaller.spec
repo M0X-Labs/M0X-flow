@@ -22,6 +22,7 @@ hidden_imports = [
     "huggingface_hub",
     "models_db",
     "engines",
+    "engines.llama_engine",
     "engines.airllm_engine",
     "engines.exo_engine",
 ]

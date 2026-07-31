@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { HardwareHud } from "@/components/layout/HardwareHud";
 import { ChatPage } from "@/pages/ChatPage";
 import { RunnerPage } from "@/pages/RunnerPage";
+import { RuntimePage } from "@/pages/RuntimePage";
 import { HubPage } from "@/pages/HubPage";
 import { PodsPage } from "@/pages/PodsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -35,6 +36,7 @@ function AnimatedRoutes() {
         <Routes location={location}>
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/runner" element={<RunnerPage />} />
+          <Route path="/runtime" element={<RuntimePage />} />
           <Route path="/hub" element={<HubPage />} />
           <Route path="/pods" element={<PodsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
