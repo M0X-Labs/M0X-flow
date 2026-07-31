@@ -11,6 +11,16 @@ backend-sidecar/build/
 backend-sidecar/dist/
 *.local
 
+# llama.cpp Executables, CUDA DLLs & Model Weight Files
+backend-sidecar/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.gguf
+*.bin
+*.safetensors
+
 # Tauri & Rust
 src-tauri/target/
 src-tauri/gen/schemas/

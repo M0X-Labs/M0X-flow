@@ -19,7 +19,8 @@
 
 ## ✨ Key Features
 
-- **⚡ Dual Engine Architecture**:
+- **⚡ Triple Engine Architecture**:
+  - **Standard Mode (llama.cpp / GGUF)**: ⭐ **Best Cross-Device Compatibility**. Direct GPU/CPU KV-cache execution with native support for Windows, macOS (Metal), Linux, NVIDIA (CUDA), AMD (Vulkan), Intel (Vulkan/SYCL), and CPU.
   - **AirLLM Mode (Single Device)**: Swaps transformer layers from disk to VRAM sequentially to execute 70B+ models on single low-VRAM machines.
   - **Exo Pods Mode (Cluster Mode)**: Uses Ring Memory-Weighted Partitioning to shard LLM layers across multiple devices (Macs, PCs, GPUs) on the local Wi-Fi network.
 - **🌐 Interactive Pods Visualizer**: Real-time canvas powered by `@xyflow/react` visualizing cluster node topologies, device memory usage, ping latency, and active tensor flow.

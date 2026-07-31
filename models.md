@@ -8,6 +8,25 @@ This document provides a detailed 1-by-1 breakdown of all open-weight model repo
 
 ---
 
+## ⚡ Inference Engine & Device Compatibility Matrix
+
+When running local models in **m0x-flow**, choosing the right execution engine for your hardware device is critical:
+
+| Engine Mode | Recommended Model Format | Windows Support | macOS Support | Linux Support | GPU Hardware Support | Best Use Case & Compatibility Rating |
+| :--- | :--- | :---: | :---: | :---: | :--- | :--- |
+| **`llama.cpp` (Standard)** | **GGUF** | ✅ Native | ✅ Metal (M1-M4) | ✅ Native | **NVIDIA (CUDA), AMD (Vulkan/ROCm), Intel (Vulkan/SYCL), Apple Metal, CPU (AVX2/NEON)** | ⭐⭐⭐⭐⭐ **BEST DEVICE COMPATIBILITY**. Universal cross-platform support. Low VRAM overhead, fast GGUF inference on consumer laptops & desktops. |
+| **`vLLM`** | Safetensors / PyTorch | ❌ (Requires WSL2) | ❌ | ✅ Native | NVIDIA CUDA (Pascal+), AMD ROCm | ⭐⭐⭐ High-concurrency Linux server deployments with dedicated enterprise NVIDIA GPUs. Lacks native Windows/macOS desktop support. |
+| **`AirLLM`** | Safetensors / GGUF | ✅ Native | ✅ Metal | ✅ Native | NVIDIA CUDA, Apple Metal, CPU | ⭐⭐⭐⭐ Running ultra-large 70B+ models on limited single-card VRAM (4-8 GB) via layer-by-layer NVMe streaming. |
+| **`Exo Pods`** | GGUF / MLX | ✅ Native | ✅ Metal | ✅ Native | Multi-device LAN Mesh (NVIDIA, Apple Silicon, CPU) | ⭐⭐⭐⭐⭐ Pooling VRAM across multiple LAN/Wi-Fi devices (Macs, Windows PCs) into a unified distributed cluster. |
+
+### 💡 Engine Recommendation Summary
+- **Why `llama.cpp` is the top recommendation**:
+  1. Runs natively on **Windows**, **macOS**, and **Linux** without requiring Docker, WSL2, or Linux containers.
+  2. Broadest GPU hardware support (NVIDIA CUDA, AMD Vulkan, Intel Vulkan/SYCL, Apple Metal, pure CPU fallback).
+  3. Optimized for **GGUF quantization** (2-bit to 8-bit), allowing 8B to 30B parameter models to run smoothly on standard consumer devices.
+
+---
+
 ## 📋 Detailed 1-by-1 Model Catalog & Real Quantization Sizes
 
 ### 1. `unsloth/Kimi-K3-GGUF`

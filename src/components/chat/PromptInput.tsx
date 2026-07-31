@@ -30,11 +30,13 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
     setDownloadedModels(models);
     setCustomModels(custom);
     
-    // Prefer custom models first, then downloaded models
+    // Prefer custom models first, then downloaded models, then default model
     if (custom.length > 0 && !selectedModelId) {
       setSelectedModelId(`custom-${custom[0].id}`);
     } else if (models.length > 0 && !selectedModelId) {
       setSelectedModelId(models[0].id);
+    } else if (!selectedModelId) {
+      setSelectedModelId("unsloth/Qwen3.6-27B-MTP-GGUF");
     }
   }, [showModelMenu, selectedModelId]);
 

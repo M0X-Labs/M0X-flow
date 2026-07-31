@@ -10,11 +10,13 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
+  Terminal,
 } from "lucide-react";
 
 const navItems = [
   { to: "/chat", label: "Chat", icon: Bot, shortcut: "⌘1", description: "AI Conversation" },
   { to: "/runner", label: "Run Model", icon: PlayCircle, shortcut: "⌘0", description: "Model Engine Runner" },
+  { to: "/runtime", label: "Runtime", icon: Terminal, shortcut: "⌘5", description: "Runtimes & Hardware" },
   { to: "/hub", label: "Model Hub", icon: Boxes, shortcut: "⌘2", description: "Hugging Face LLMs" },
   { to: "/pods", label: "Exo Pods", icon: Network, shortcut: "⌘3", description: "P2P VRAM Cluster" },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal, shortcut: "⌘4", description: "System Preferences" },

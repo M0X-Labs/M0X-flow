@@ -33,7 +33,7 @@ const DEFAULT_METRICS: HardwareMetrics = {
 // Global reactive state listeners
 let globalHostedModel: HostedModel | null = null;
 let globalIsGenerating = false;
-let globalEngineMode: "standard" | "airllm" | "exo" = "exo";
+let globalEngineMode: "standard" | "airllm" | "exo" = "standard";
 let globalMetrics: HardwareMetrics = DEFAULT_METRICS;
 let globalIsLoaded = false;
 const listeners = new Set<() => void>();
@@ -94,7 +94,7 @@ export function useRuntimeStore() {
     return () => clearInterval(interval);
   }, []);
 
-  const hostModel = useCallback(async (id: string, name: string, engineMode: "standard" | "airllm" | "exo" = "exo") => {
+  const hostModel = useCallback(async (id: string, name: string, engineMode: "standard" | "airllm" | "exo" = "standard") => {
     globalHostedModel = { id, name, engineMode };
     globalEngineMode = engineMode;
     globalMetrics = {
