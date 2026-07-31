@@ -275,16 +275,18 @@ export function RunnerPage() {
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs font-mono">
               <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
               <span className="text-amber-300 font-bold">
-                {activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1"}
+                {activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "Connecting Cloudflare..."}
               </span>
-              <button
-                type="button"
-                onClick={() => handleCopyText(activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1", "header")}
-                className="p-1 hover:bg-amber-500/20 text-amber-300 rounded transition-colors cursor-pointer"
-                title="Copy Worldwide Cloudflare Base URL"
-              >
-                {copiedLabel === "header" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
+              {activeCloudflareUrl && (
+                <button
+                  type="button"
+                  onClick={() => handleCopyText(`${activeCloudflareUrl}/v1`, "header")}
+                  className="p-1 hover:bg-amber-500/20 text-amber-300 rounded transition-colors cursor-pointer"
+                  title="Copy Worldwide Cloudflare Base URL"
+                >
+                  {copiedLabel === "header" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              )}
             </div>
           ) : accessMode === "lan" ? (
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs font-mono">
@@ -353,15 +355,17 @@ export function RunnerPage() {
                   {accessMode === "cloudflare" ? (
                     <div className="flex items-center gap-1.5 text-xs font-mono text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/30">
                       <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                      <span>Cloudflare Worldwide: <strong>{activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1"}</strong></span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyText(activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "https://m0x-flow.trycloudflare.com/v1", "active_cf")}
-                        className="p-1 hover:bg-amber-500/20 rounded text-amber-300 cursor-pointer"
-                        title="Copy Cloudflare Public Base URL"
-                      >
-                        {copiedLabel === "active_cf" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                      </button>
+                      <span>Cloudflare Worldwide: <strong>{activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "Connecting Tunnel..."}</strong></span>
+                      {activeCloudflareUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopyText(`${activeCloudflareUrl}/v1`, "active_cf")}
+                          className="p-1 hover:bg-amber-500/20 rounded text-amber-300 cursor-pointer"
+                          title="Copy Cloudflare Public Base URL"
+                        >
+                          {copiedLabel === "active_cf" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
                     </div>
                   ) : accessMode === "lan" ? (
                     <div className="flex items-center gap-1.5 text-xs font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/30">
@@ -453,7 +457,7 @@ export function RunnerPage() {
               <h2 className="text-lg font-bold text-[#f4f4f5]">No Active Model Loaded into VRAM</h2>
               <p className="text-xs text-[#a1a1aa] mt-1 max-w-md mx-auto">
                 {realModels.length > 0
-                  ? `To run a model on Base URL ${accessMode === "cloudflare" ? (activeCloudflareUrl || "https://m0x-flow.trycloudflare.com") + "/v1" : accessMode === "lan" ? `http://${lanIp}:${hostingPort}/v1` : `http://127.0.0.1:${hostingPort}/v1`}, click the Start Model Launcher Wizard button.`
+                  ? `To run a model on Base URL ${accessMode === "cloudflare" ? (activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "Cloudflare Tunnel") : accessMode === "lan" ? `http://${lanIp}:${hostingPort}/v1` : `http://127.0.0.1:${hostingPort}/v1`}, click the Start Model Launcher Wizard button.`
                   : "No downloaded models found in local storage. Head over to Model Hub to download GGUF models."}
               </p>
             </div>
@@ -766,7 +770,7 @@ export function RunnerPage() {
                         <span className="text-[#a1a1aa] font-sans">Base URL:</span>
                         <span className="font-bold text-blue-400">
                           {accessMode === "cloudflare"
-                            ? `${activeCloudflareUrl || "https://m0x-flow.trycloudflare.com"}/v1`
+                            ? (activeCloudflareUrl ? `${activeCloudflareUrl}/v1` : "Connecting Cloudflare Tunnel...")
                             : accessMode === "lan"
                             ? `http://${lanIp}:${hostingPort}/v1`
                             : `http://127.0.0.1:${hostingPort}/v1`}

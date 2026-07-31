@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from models_db import CURATED_DEFAULT_MODELS, search_curated_models
 from engines.llama_engine import llama_engine_instance, SYSTEM_LOGS, add_system_log, SERVER_EXE, LLAMA_CPP_AVAILABLE
+from setup_cloudflared import setup_cloudflared_binary, EMPTY_CONFIG_YML
 
 
 CONFIG_DIR = Path.home() / ".m0x-flow"
@@ -469,24 +470,30 @@ def start_real_cloudflare_tunnel(port: int = 8080) -> str:
     global CLOUDFLARE_SUBPROCESS
     stop_real_cloudflare_tunnel()
 
-    cloudflared_bin = shutil.which("cloudflared")
-    if not cloudflared_bin and os.path.exists(r"C:\Program Files (x86)\cloudflared\cloudflared.exe"):
-        cloudflared_bin = r"C:\Program Files (x86)\cloudflared\cloudflared.exe"
+    cloudflared_bin = setup_cloudflared_binary()
 
-    if cloudflared_bin:
+    if cloudflared_bin and os.path.exists(cloudflared_bin):
         try:
+            cmd = [
+                cloudflared_bin, "tunnel",
+                "--config", str(EMPTY_CONFIG_YML),
+                "--url", f"http://127.0.0.1:{port}",
+                "--http-host-header", "localhost"
+            ]
+
             proc = subprocess.Popen(
-                [cloudflared_bin, "tunnel", "--url", f"http://127.0.0.1:{port}"],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             )
             CLOUDFLARE_SUBPROCESS = proc
 
             found_url = None
             start_time = time.time()
-            while time.time() - start_time < 10:
+            while time.time() - start_time < 12:
                 if proc.poll() is not None:
                     break
                 line = proc.stdout.readline()
@@ -498,13 +505,26 @@ def start_real_cloudflare_tunnel(port: int = 8080) -> str:
                     found_url = match.group(0)
                     break
 
+            def drain_stdout(p):
+                try:
+                    while p.poll() is None:
+                        l = p.stdout.readline()
+                        if not l:
+                            break
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=drain_stdout, args=(proc,), daemon=True)
+            t.start()
+
             if found_url:
+                print(f"[Cloudflare Tunnel] Live working tunnel URL established: {found_url}", flush=True)
                 return found_url
         except Exception as e:
-            print(f"[Cloudflare Tunnel] Error starting tunnel: {e}")
+            print(f"[Cloudflare Tunnel] Error starting tunnel: {e}", flush=True)
 
-    tunnel_id = os.urandom(4).hex()
-    return f"https://m0x-flow-{tunnel_id}.trycloudflare.com"
+    print("[Cloudflare Tunnel] Warning: Real Cloudflare tunnel URL could not be established.", flush=True)
+    return None
 
 
 

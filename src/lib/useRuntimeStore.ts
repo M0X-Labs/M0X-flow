@@ -89,6 +89,15 @@ export function useRuntimeStore() {
               cloudflareActive: data.hosted_model.cloudflare_active,
               cloudflareUrl: data.hosted_model.cloudflare_url,
             };
+            if (data.hosted_model.cloudflare_active) {
+              globalCloudflareActive = true;
+              if (data.hosted_model.cloudflare_url) {
+                globalCloudflareUrl = data.hosted_model.cloudflare_url;
+              }
+            } else {
+              globalCloudflareActive = false;
+              globalCloudflareUrl = null;
+            }
           } else if (!globalIsGenerating && !globalHostedModel?.id) {
             globalHostedModel = null;
           }
@@ -119,7 +128,7 @@ export function useRuntimeStore() {
       port,
       hostIp,
       cloudflareActive,
-      cloudflareUrl: cloudflareActive ? (globalCloudflareUrl || `https://m0x-flow-${Math.random().toString(36).substring(2, 10)}.trycloudflare.com`) : null,
+      cloudflareUrl: cloudflareActive ? globalCloudflareUrl : null,
     };
     globalEngineMode = engineMode;
     globalMetrics = {
@@ -134,13 +143,32 @@ export function useRuntimeStore() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model_id: id, model_name: name, engine_mode: engineMode, port, host_ip: hostIp, cloudflare_active: cloudflareActive }),
-    }).catch(() => null);
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const realUrl = data?.tunnel?.url || data?.state?.cloudflare_url || null;
+        if (cloudflareActive && realUrl) {
+          globalCloudflareUrl = realUrl;
+          if (globalHostedModel) {
+            globalHostedModel = { ...globalHostedModel, cloudflareActive: true, cloudflareUrl: realUrl };
+          }
+        } else if (!cloudflareActive) {
+          globalCloudflareUrl = null;
+          if (globalHostedModel) {
+            globalHostedModel = { ...globalHostedModel, cloudflareActive: false, cloudflareUrl: null };
+          }
+        }
+        notify();
+      })
+      .catch(() => null);
   }, []);
 
   const unhostModel = useCallback(async () => {
     globalHostedModel = null;
     globalIsGenerating = false;
     globalMetrics = DEFAULT_METRICS;
+    globalCloudflareUrl = null;
+    globalCloudflareActive = false;
     notify();
 
     fetch("http://localhost:14321/api/model/unhost", {
@@ -180,7 +208,7 @@ export function useRuntimeStore() {
         port,
         hostIp,
         cloudflareActive,
-        cloudflareUrl: cloudflareActive ? (globalCloudflareUrl || `https://m0x-flow-${Math.random().toString(36).substring(2, 10)}.trycloudflare.com`) : null,
+        cloudflareUrl: cloudflareActive ? globalCloudflareUrl : null,
       };
       notify();
       fetch("http://localhost:14321/api/model/host", {
@@ -194,7 +222,24 @@ export function useRuntimeStore() {
           host_ip: hostIp,
           cloudflare_active: cloudflareActive,
         }),
-      }).catch(() => null);
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          const realUrl = data?.tunnel?.url || data?.state?.cloudflare_url || null;
+          if (cloudflareActive && realUrl) {
+            globalCloudflareUrl = realUrl;
+            if (globalHostedModel) {
+              globalHostedModel = { ...globalHostedModel, cloudflareActive: true, cloudflareUrl: realUrl };
+            }
+          } else if (!cloudflareActive) {
+            globalCloudflareUrl = null;
+            if (globalHostedModel) {
+              globalHostedModel = { ...globalHostedModel, cloudflareActive: false, cloudflareUrl: null };
+            }
+          }
+          notify();
+        })
+        .catch(() => null);
     }
   }, []);
 
