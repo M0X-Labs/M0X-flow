@@ -32,6 +32,8 @@ from pydantic import BaseModel
 
 from models_db import CURATED_DEFAULT_MODELS, search_curated_models
 from engines.llama_engine import llama_engine_instance, SYSTEM_LOGS, add_system_log, SERVER_EXE, LLAMA_CPP_AVAILABLE
+from engines.airllm_engine import airllm_engine_instance, AIRLLM_AVAILABLE
+from engines.exo_engine import exo_engine_instance, EXO_AVAILABLE, EXO_CLI_AVAILABLE
 from setup_cloudflared import setup_cloudflared_binary, EMPTY_CONFIG_YML
 
 
@@ -209,7 +211,25 @@ async def lifespan(app: FastAPI):
         setup_llama_binary()
     except Exception:
         pass
+    # Register log callbacks for AirLLM and Exo engines
+    airllm_engine_instance.set_log_callback(add_system_log)
+    exo_engine_instance.set_log_callback(add_system_log)
+    add_system_log("info", f"AirLLM engine available: {AIRLLM_AVAILABLE}", "engine")
+    add_system_log("info", f"Exo Pods engine available: {EXO_AVAILABLE or EXO_CLI_AVAILABLE}", "engine")
     yield
+    # Cleanup all engines on shutdown
+    try:
+        llama_engine_instance.unload_model()
+    except Exception:
+        pass
+    try:
+        airllm_engine_instance.unload()
+    except Exception:
+        pass
+    try:
+        exo_engine_instance.stop_daemon()
+    except Exception:
+        pass
     print(f"[m0x-sidecar] Backend sidecar shutting down...", flush=True)
 
 
@@ -379,23 +399,51 @@ async def chat_completions(req: ChatCompletionRequest):
         speed = gen_res["tokens_per_sec"]
         usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 42})
     elif engine == "airllm":
-        response = (
-            f"[AirLLM Layer-by-Layer Mode]\n"
-            f"Model: {model_name}\n\n"
-            f"Processed prompt: '{req.prompt}'\n"
-            f"NVMe disk-to-VRAM streaming executed successfully across model layers."
-        )
-        speed = 14.8
-        usage = {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 42}
+        # Route to real AirLLM engine
+        if airllm_engine_instance.is_loaded:
+            gen_res = airllm_engine_instance.generate(prompt=req.prompt)
+            response = gen_res["content"]
+            speed = gen_res["tokens_per_sec"]
+            usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0})
+        else:
+            # Auto-load if model was hosted but engine not loaded yet
+            curr_dir = get_current_models_dir()
+            load_res = airllm_engine_instance.load_model(model_name, curr_dir)
+            if load_res.get("status") == "loaded":
+                gen_res = airllm_engine_instance.generate(prompt=req.prompt)
+                response = gen_res["content"]
+                speed = gen_res["tokens_per_sec"]
+                usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0})
+            else:
+                response = f"[AirLLM Error] Failed to load model: {load_res.get('error', 'Unknown error')}"
+                speed = 0.0
+                usage = {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0}
+    elif engine == "exo":
+        # Route to real Exo Pods engine
+        if exo_engine_instance.is_running:
+            gen_res = exo_engine_instance.chat_completion(prompt=req.prompt, model=model_name)
+            response = gen_res["content"]
+            speed = gen_res["tokens_per_sec"]
+            usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0})
+        else:
+            # Try to start daemon and then generate
+            start_res = exo_engine_instance.start_daemon(model_identifier=model_name)
+            if start_res.get("status") in ["loaded", "connected", "starting"]:
+                # Give the daemon a moment to settle
+                import asyncio
+                await asyncio.sleep(2)
+                gen_res = exo_engine_instance.chat_completion(prompt=req.prompt, model=model_name)
+                response = gen_res["content"]
+                speed = gen_res["tokens_per_sec"]
+                usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0})
+            else:
+                response = f"[Exo Pods Error] Failed to start daemon: {start_res.get('error', 'Unknown error')}"
+                speed = 0.0
+                usage = {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0}
     else:
-        response = (
-            f"[Exo Pods P2P Cluster Mode]\n"
-            f"Model: {model_name}\n\n"
-            f"Processed prompt: '{req.prompt}'\n"
-            f"Tensor parallel execution distributed across local mesh network nodes!"
-        )
-        speed = 46.2
-        usage = {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 42}
+        response = f"[Error] Unknown engine mode: {engine}"
+        speed = 0.0
+        usage = {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0}
 
     # Reset generating status after completing inference
     HOSTED_MODEL_STATE["is_generating"] = False
@@ -422,6 +470,8 @@ class HostModelRequest(BaseModel):
     port: int = 8080
     host_ip: str = "127.0.0.1"
     cloudflare_active: bool = False
+    config: Optional[dict] = None
+    server_settings: Optional[dict] = None
 
 
 class TunnelConfigRequest(BaseModel):
@@ -676,20 +726,20 @@ async def get_runtime_details():
                 "name": "AirLLM NVMe Engine",
                 "version": "v1.4.2",
                 "description": "Layer-by-layer NVMe VRAM offloading module in sidecar",
-                "installed": True,
-                "active": active_backend == "airllm",
+                "installed": AIRLLM_AVAILABLE,
+                "active": airllm_engine_instance.is_loaded,
                 "category": "airllm",
-                "downloadSize": "Installed",
+                "downloadSize": "pip install airllm" if not AIRLLM_AVAILABLE else "Installed",
             },
             {
                 "id": "exo-pods-mesh",
                 "name": "Exo Pods Mesh Cluster",
                 "version": "v0.3.6",
                 "description": "Distributed memory-weighted P2P cluster mesh module",
-                "installed": True,
-                "active": active_backend == "exo_pods",
+                "installed": EXO_AVAILABLE or EXO_CLI_AVAILABLE,
+                "active": exo_engine_instance.is_running,
                 "category": "exo",
-                "downloadSize": "Installed",
+                "downloadSize": "pip install exo-explore" if not (EXO_AVAILABLE or EXO_CLI_AVAILABLE) else "Installed",
             },
         ],
         "active_model": {
@@ -778,12 +828,27 @@ async def get_system_metrics():
     engine = HOSTED_MODEL_STATE["engine_mode"]
     total_ram, used_ram = get_real_system_ram()
 
+    # Detect real VRAM usage via nvidia-smi if available
+    real_vram_used = 0.0
+    real_vram_total = 16.0
+    try:
+        smi = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if smi.stdout and "," in smi.stdout:
+            parts = smi.stdout.strip().split(",")
+            real_vram_used = round(float(parts[0].strip()) / 1024.0, 1)
+            real_vram_total = round(float(parts[1].strip()) / 1024.0, 1)
+    except Exception:
+        pass
+
     if not is_active:
         return {
             "is_running": False,
             "tokens_per_sec": 0.0,
-            "vram_used_gb": 0.0,
-            "vram_total_gb": 16.0,
+            "vram_used_gb": real_vram_used,
+            "vram_total_gb": real_vram_total,
             "ram_used_gb": used_ram,
             "ram_total_gb": total_ram,
             "gpu_model": get_real_gpu_info(),
@@ -791,25 +856,30 @@ async def get_system_metrics():
             "hosted_model": None,
         }
 
-    # Active metrics per engine mode
+    # Get real metrics from the active engine
+    model_label = HOSTED_MODEL_STATE['model_name'] or 'Active'
+    is_gen = HOSTED_MODEL_STATE["is_generating"]
+
     if engine == "airllm":
-        tok_speed = 14.8
-        vram_used = 4.2
-        engine_label = f"AirLLM ({HOSTED_MODEL_STATE['model_name'] or 'Active'})"
+        status = airllm_engine_instance.get_status()
+        tok_speed = status["last_speed"] if is_gen else 0.0
+        vram_used = status["vram_used_gb"] if status["is_loaded"] else real_vram_used
+        engine_label = f"AirLLM ({model_label})"
     elif engine == "exo":
-        tok_speed = 44.1
-        vram_used = 12.5
-        engine_label = f"Exo Pods Mesh ({HOSTED_MODEL_STATE['model_name'] or 'Hosted'})"
+        status = exo_engine_instance.get_status()
+        tok_speed = status["last_speed"] if is_gen else 0.0
+        vram_used = real_vram_used  # Exo distributes across nodes
+        engine_label = f"Exo Pods Mesh ({model_label})"
     else:
-        tok_speed = 52.4
-        vram_used = 8.5
-        engine_label = f"Standard llama.cpp ({HOSTED_MODEL_STATE['model_name'] or 'Active'})"
+        tok_speed = 0.0
+        vram_used = real_vram_used
+        engine_label = f"Standard llama.cpp ({model_label})"
 
     return {
         "is_running": True,
-        "tokens_per_sec": tok_speed if HOSTED_MODEL_STATE["is_generating"] else 0.0,
+        "tokens_per_sec": tok_speed,
         "vram_used_gb": vram_used,
-        "vram_total_gb": 16.0,
+        "vram_total_gb": real_vram_total,
         "ram_used_gb": used_ram,
         "ram_total_gb": total_ram,
         "gpu_model": get_real_gpu_info(),
@@ -822,12 +892,47 @@ async def get_system_metrics():
 async def host_model(req: HostModelRequest):
     """Host a model on the sidecar / Exo P2P cluster with custom IP, port, and optional Cloudflare tunnel."""
     curr_dir = get_current_models_dir()
-    load_res = llama_engine_instance.load_model(req.model_id, curr_dir, port=req.port)
+    engine = req.engine_mode.lower()
+    load_res = {}
+
+    # Route to the correct engine based on engine_mode
+    if engine == "airllm":
+        # Unload any other engines first
+        llama_engine_instance.unload_model()
+        exo_engine_instance.stop_daemon()
+        # Load via AirLLM engine
+        load_res = airllm_engine_instance.load_model(
+            req.model_id,
+            curr_dir,
+            config=req.config,
+        )
+        add_system_log("info", f"AirLLM engine load result: {load_res.get('status', 'unknown')}", "engine")
+    elif engine == "exo":
+        # Unload any other engines first
+        llama_engine_instance.unload_model()
+        airllm_engine_instance.unload()
+        # Start Exo P2P daemon
+        load_res = exo_engine_instance.start_daemon(
+            model_identifier=req.model_id,
+            config=req.config,
+        )
+        add_system_log("info", f"Exo Pods engine start result: {load_res.get('status', 'unknown')}", "engine")
+    else:
+        # Standard llama.cpp engine (default)
+        airllm_engine_instance.unload()
+        exo_engine_instance.stop_daemon()
+        load_res = llama_engine_instance.load_model(
+            req.model_id,
+            curr_dir,
+            port=req.port,
+            config=req.config,
+            server_settings=req.server_settings,
+        )
 
     HOSTED_MODEL_STATE["is_hosted"] = True
     HOSTED_MODEL_STATE["model_id"] = req.model_id
     HOSTED_MODEL_STATE["model_name"] = req.model_name
-    HOSTED_MODEL_STATE["engine_mode"] = req.engine_mode
+    HOSTED_MODEL_STATE["engine_mode"] = engine
     HOSTED_MODEL_STATE["port"] = req.port
     HOSTED_MODEL_STATE["host_ip"] = req.host_ip
     HOSTED_MODEL_STATE["cloudflare_active"] = req.cloudflare_active
@@ -854,18 +959,23 @@ async def host_model(req: HostModelRequest):
 
 @app.post("/api/model/unhost")
 async def unhost_model():
-    """Un-host active model from sidecar / Exo cluster."""
+    """Un-host active model from sidecar / Exo cluster. Cleans up ALL engine types."""
     await asyncio.to_thread(stop_real_cloudflare_tunnel)
+    # Unload ALL engines to ensure clean state
     llama_engine_instance.unload_model()
+    airllm_engine_instance.unload()
+    exo_engine_instance.stop_daemon()
     HOSTED_MODEL_STATE["is_hosted"] = False
     HOSTED_MODEL_STATE["model_id"] = None
     HOSTED_MODEL_STATE["model_name"] = None
+    HOSTED_MODEL_STATE["engine_mode"] = "standard"
     HOSTED_MODEL_STATE["is_generating"] = False
     HOSTED_MODEL_STATE["cloudflare_active"] = False
     HOSTED_MODEL_STATE["cloudflare_url"] = None
     CLOUDFLARE_TUNNEL_STATE["active"] = False
     CLOUDFLARE_TUNNEL_STATE["url"] = None
     CLOUDFLARE_TUNNEL_STATE["status"] = "disconnected"
+    add_system_log("info", "All engines unloaded and model unhosted", "engine")
     return {"status": "unhosted", "state": HOSTED_MODEL_STATE}
 
 

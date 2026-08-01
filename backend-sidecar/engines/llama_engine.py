@@ -105,11 +105,18 @@ class LlamaEngine:
 
         return None
 
-    def load_model(self, model_identifier: str, models_dir: Path, gpu_layers: int = 99, ctx_size: int = 4096, port: int = 8080) -> Dict[str, Any]:
+    def load_model(self, model_identifier: str, models_dir: Path, gpu_layers: int = 99, ctx_size: int = 4096, port: int = 8080, config: Optional[dict] = None, server_settings: Optional[dict] = None) -> Dict[str, Any]:
         """Load model into NVIDIA GPU VRAM using llama-server CUDA binary or fallbacks on a configurable port."""
         self.unload_model()
         self.active_model_name = model_identifier
         self.server_port = port
+        
+        cfg = config or {}
+        srv = server_settings or {}
+
+        # Merge config values if provided, otherwise fallback to kwargs
+        actual_gpu_layers = cfg.get("gpuOffloadLayers", gpu_layers)
+        actual_ctx_size = cfg.get("contextLength", ctx_size)
 
         gguf_file = self.find_gguf_file(model_identifier, models_dir)
 
@@ -117,16 +124,29 @@ class LlamaEngine:
         if gguf_file and SERVER_EXE.exists():
             try:
                 target_file = str(gguf_file.resolve())
-                add_system_log("info", f"Launching CUDA llama-server (-ngl {gpu_layers}) for: {target_file}", "llama-server")
+                add_system_log("info", f"Launching CUDA llama-server (-ngl {actual_gpu_layers}) for: {target_file}", "llama-server")
+
+                host_ip = "0.0.0.0" if srv.get("serveLan", False) else "127.0.0.1"
 
                 cmd = [
                     str(SERVER_EXE),
                     "-m", target_file,
-                    "-ngl", str(gpu_layers),
-                    "-c", str(ctx_size),
+                    "-ngl", str(actual_gpu_layers),
+                    "-c", str(actual_ctx_size),
                     "--port", str(self.server_port),
-                    "--host", "127.0.0.1"
+                    "--host", host_ip
                 ]
+                
+                if cfg.get("cpuThreads"):
+                    cmd.extend(["-t", str(cfg["cpuThreads"])])
+                if cfg.get("evalBatchSize"):
+                    cmd.extend(["-b", str(cfg["evalBatchSize"])])
+                if cfg.get("physicalBatchSize"):
+                    cmd.extend(["-ub", str(cfg["physicalBatchSize"])])
+                if cfg.get("flashAttention", True):
+                    cmd.append("-fa")
+                if srv.get("requireAuth", False):
+                    cmd.extend(["--api-key", "m0x-secret"])
 
                 # Spawn background subprocess
                 self.server_process = subprocess.Popen(
