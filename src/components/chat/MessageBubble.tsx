@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { User, Zap, Cpu, Network, Copy, Check, Terminal } from "lucide-react";
+import { User, Zap, Cpu, Network, Copy, Check, Terminal, Brain, ChevronDown } from "lucide-react";
 import { motion } from "framer-motion";
 
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  image?: string;
+  thinking?: string;
   engine?: "standard" | "airllm" | "exo";
   tokensPerSec?: number;
   timestamp?: string;
@@ -96,6 +98,34 @@ function CodeSnippetBlock({ code, language }: { code: string; language: string }
 }
 
 /**
+ * ThinkingBlock — Collapsible reasoning/thinking section for assistant messages.
+ */
+function ThinkingBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="mb-3 rounded-xl border border-amber-500/20 bg-[#141208]/80 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3.5 py-2 text-[11px] text-amber-400/80 hover:text-amber-300 transition-colors cursor-pointer select-none"
+      >
+        <Brain className="w-3.5 h-3.5 shrink-0" />
+        <span className="font-bold uppercase tracking-wider">Thinking</span>
+        <ChevronDown
+          className={`w-3.5 h-3.5 ml-auto transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="px-3.5 pb-3 text-xs text-[#a1a1aa] leading-relaxed whitespace-pre-wrap break-words border-t border-amber-500/10 pt-2.5">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * MessageBubble — Renders chat messages with role-based clean obsidian styling,
  * avatars, copy button, engine indicator badges, and token speed tags.
  */
@@ -160,7 +190,19 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               : "bg-[#121215] text-[#f4f4f5] border border-[#27272a] rounded-tl-xs"
           }`}
         >
-          <FormattedContent text={message.content} />
+          {!isUser && message.thinking && <ThinkingBlock text={message.thinking} />}
+
+          {isUser && message.image && (
+            <div className="mb-2.5">
+              <img
+                src={message.image}
+                alt="user attachment"
+                className="max-w-[280px] max-h-[240px] rounded-lg border border-[#3f3f46] object-contain select-none"
+              />
+            </div>
+          )}
+
+          {message.content && <FormattedContent text={message.content} />}
 
           {/* Action Overlay (Copy Message) */}
           {!isUser && (

@@ -8,7 +8,6 @@ Allocates 100% of GGUF model weights directly into NVIDIA GPU VRAM (RTX 5080)
 via -ngl 99 layer offloading.
 """
 
-import os
 import sys
 import json
 import time
@@ -59,6 +58,7 @@ except ImportError:
 TRANSFORMERS_AVAILABLE = False
 try:
     import torch
+    _ = torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -78,6 +78,29 @@ class LlamaEngine:
         self.backend_type: str = "none"
         self.server_port: int = 8080
 
+    @staticmethod
+    def _pick_main_gguf(ggufs: list) -> Optional[Path]:
+        """Pick the primary model GGUF, ignoring mmproj/vision projector sidecars and preferring the largest file."""
+        candidates = [g for g in ggufs if "mmproj" not in g.name.lower()]
+        if not candidates:
+            candidates = ggufs
+        if not candidates:
+            return None
+        return max(candidates, key=lambda g: g.stat().st_size)
+
+    @staticmethod
+    def find_mmproj_file(gguf_file: Optional[Path]) -> Optional[Path]:
+        """Locate a vision projector (mmproj) GGUF next to the main model file, if present."""
+        if not gguf_file:
+            return None
+        for search_dir in [gguf_file.parent, gguf_file.parent.parent]:
+            if not search_dir.exists():
+                continue
+            for f in search_dir.glob("*.gguf"):
+                if f.is_file() and f.name.lower().startswith("mmproj"):
+                    return f
+        return None
+
     def find_gguf_file(self, model_identifier: str, models_dir: Path) -> Optional[Path]:
         """Resolve exact .gguf file path from model identifier or models directory."""
         if not models_dir.exists():
@@ -91,8 +114,9 @@ class LlamaEngine:
                 return model_path
             elif model_path.is_dir():
                 ggufs = list(model_path.glob("**/*.gguf"))
-                if ggufs:
-                    return ggufs[0]
+                picked = self._pick_main_gguf(ggufs)
+                if picked:
+                    return picked
 
         direct = models_dir / model_identifier
         if direct.exists() and direct.suffix == ".gguf":
@@ -100,8 +124,9 @@ class LlamaEngine:
 
         # Recursive search in models_dir for any GGUF file
         all_ggufs = list(models_dir.glob("**/*.gguf"))
-        if all_ggufs:
-            return all_ggufs[0]
+        picked = self._pick_main_gguf(all_ggufs)
+        if picked:
+            return picked
 
         return None
 
@@ -119,6 +144,7 @@ class LlamaEngine:
         actual_ctx_size = cfg.get("contextLength", ctx_size)
 
         gguf_file = self.find_gguf_file(model_identifier, models_dir)
+        mmproj_file = self.find_mmproj_file(gguf_file)
 
         # 1. Native llama-server.exe CUDA binary (Loads directly onto RTX 5080 VRAM)
         if gguf_file and SERVER_EXE.exists():
@@ -136,6 +162,10 @@ class LlamaEngine:
                     "--port", str(self.server_port),
                     "--host", host_ip
                 ]
+
+                if mmproj_file:
+                    cmd.extend(["--mmproj", str(mmproj_file.resolve())])
+                    add_system_log("info", f"Vision projector (mmproj) loaded: {mmproj_file.name}", "llama-server")
                 
                 if cfg.get("cpuThreads"):
                     cmd.extend(["-t", str(cfg["cpuThreads"])])
@@ -144,7 +174,7 @@ class LlamaEngine:
                 if cfg.get("physicalBatchSize"):
                     cmd.extend(["-ub", str(cfg["physicalBatchSize"])])
                 if cfg.get("flashAttention", True):
-                    cmd.append("-fa")
+                    cmd.extend(["-fa", "auto"])
                 if srv.get("requireAuth", False):
                     cmd.extend(["--api-key", "m0x-secret"])
 
@@ -173,12 +203,14 @@ class LlamaEngine:
                 if ready:
                     self.active_model_path = gguf_file
                     self.backend_type = "cuda_server"
-                    add_system_log("info", f"llama-server CUDA backend ACTIVE & model weights offloaded to VRAM!", "llama-server")
+                    add_system_log("info", "llama-server CUDA backend ACTIVE & model weights offloaded to VRAM!", "llama-server")
                     return {
                         "status": "loaded",
                         "backend": "cuda_server",
                         "model": model_identifier,
                         "path": target_file,
+                        "mmproj": str(mmproj_file.resolve()) if mmproj_file else None,
+                        "vision": bool(mmproj_file),
                         "gpu_layers": gpu_layers,
                         "port": self.server_port
                     }
@@ -260,8 +292,8 @@ class LlamaEngine:
         self.active_model_name = None
         self.backend_type = "none"
 
-    def generate(self, prompt: str, model_name: str, models_dir: Optional[Path] = None, max_tokens: int = 512, temperature: float = 0.7) -> Dict[str, Any]:
-        """Execute text completion across active backend."""
+    def generate(self, prompt: str, model_name: str, models_dir: Optional[Path] = None, max_tokens: int = 512, temperature: float = 0.7, image: Optional[str] = None) -> Dict[str, Any]:
+        """Execute text (or vision) completion across active backend."""
         start_time = time.time()
         add_system_log("info", f"Processing chat completion prompt: \"{prompt[:60]}...\"", "engine")
 
@@ -273,22 +305,39 @@ class LlamaEngine:
         if self.backend_type == "cuda_server" or self._check_http_service(f"http://127.0.0.1:{self.server_port}/health"):
             try:
                 url = f"http://127.0.0.1:{self.server_port}/v1/chat/completions"
+                # Build OpenAI-style message content (multimodal when an image is attached)
+                user_content = [{"type": "text", "text": prompt}]
+                if image:
+                    user_content.append({"type": "image_url", "image_url": {"url": image}})
+                messages = [{"role": "user", "content": user_content if image else prompt}]
                 req_data = json.dumps({
                     "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature
                 }).encode("utf-8")
                 req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                    text = data["choices"][0]["message"]["content"]
+                    message = data["choices"][0]["message"]
+                    text = message.get("content") or ""
+                    thinking = message.get("reasoning_content")
+
+                    # Fallback: parse <thinking>...</thinking> blocks out of the raw content
+                    if not thinking:
+                        import re
+                        m = re.search(r"<thinking>(.*?)</thinking>", text, re.DOTALL)
+                        if m:
+                            thinking = m.group(1).strip()
+                            text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL).strip()
+
                     elapsed = time.time() - start_time
                     toks = data.get("usage", {}).get("completion_tokens", len(text.split()))
                     tps = round(toks / elapsed, 1) if elapsed > 0 else 65.0
                     add_system_log("info", f"GPU Inference complete: generated {toks} tokens in {elapsed:.2f}s ({tps} t/s)", "cuda_server")
                     return {
                         "content": text,
+                        "thinking": thinking,
                         "tokens_per_sec": tps,
                         "backend": "cuda_server",
                         "usage": data.get("usage", {"prompt_tokens": len(prompt.split()), "completion_tokens": toks})
@@ -331,6 +380,7 @@ class LlamaEngine:
         )
         return {
             "content": formatted_response,
+            "thinking": None,
             "tokens_per_sec": 58.4,
             "backend": "standard_llama",
             "usage": {"prompt_tokens": len(prompt.split()), "completion_tokens": 42}

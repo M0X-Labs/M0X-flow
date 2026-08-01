@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, Paperclip, Sparkles, ChevronDown, Download, Check, Settings } from "lucide-react";
+import { ArrowUp, Square, Paperclip, Sparkles, ChevronDown, Download, Check, Settings, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { getStoredModels, RealModel, getStoredCustomModels, CustomModel } from "@/lib/useModelStore";
 
 interface PromptInputProps {
-  onSendMessage?: (text: string, model: string) => void;
+  onSendMessage?: (text: string, model: string, image?: string) => void;
   onStopGeneration?: () => void;
   isGenerating?: boolean;
 }
@@ -19,8 +19,11 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [image, setImage] = useState<string | null>(null);
+  const [imageName, setImageName] = useState<string>("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
   // Load real models and custom models from local storage / sidecar
@@ -65,12 +68,27 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
   }, [prompt]);
 
   const handleSubmit = () => {
-    if (!prompt.trim() || isGenerating) return;
-    onSendMessage?.(prompt.trim(), selectedModelId || "huggingface/default");
+    if ((!prompt.trim() && !image) || isGenerating) return;
+    onSendMessage?.(prompt.trim(), selectedModelId || "huggingface/default", image || undefined);
     setPrompt("");
+    setImage(null);
+    setImageName("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImage(reader.result as string);
+      setImageName(file.name);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -227,23 +245,60 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
 
         {/* Input Area */}
         <div className="flex items-end gap-2.5">
+          {/* Hidden File Input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+
           <button
             type="button"
-            className="p-2.5 rounded-xl text-[#a1a1aa] hover:text-[#f4f4f5] hover:bg-[#18181c] border border-transparent transition-all shrink-0 cursor-pointer"
-            title="Attach Context Document / Code file"
+            onClick={() => fileInputRef.current?.click()}
+            className={`p-2.5 rounded-xl transition-all shrink-0 cursor-pointer border ${
+              image
+                ? "text-emerald-400 bg-[#18181c] border-emerald-500/40"
+                : "text-[#a1a1aa] hover:text-[#f4f4f5] hover:bg-[#18181c] border-transparent"
+            }`}
+            title="Attach image (vision models)"
           >
             <Paperclip className="w-4 h-4" />
           </button>
 
-          <textarea
-            ref={textareaRef}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask m0x-flow (AirLLM layer-by-layer or Exo P2P)..."
-            rows={1}
-            className="flex-1 bg-transparent text-sm text-[#f4f4f5] placeholder-[#71717a] resize-none outline-none py-1.5 max-h-40 font-sans leading-relaxed select-text"
-          />
+          <div className="flex-1 space-y-2">
+            {/* Image Attachment Preview */}
+            {image && (
+              <div className="relative inline-block rounded-xl overflow-hidden border border-[#3f3f46] bg-[#121215] shadow-lg align-top">
+                <img src={image} alt="attachment" className="max-w-[200px] max-h-[150px] object-contain block" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImage(null);
+                    setImageName("");
+                  }}
+                  className="absolute top-1.5 right-1.5 p-1 rounded-lg bg-[#09090b]/80 border border-[#27272a] text-[#a1a1aa] hover:text-[#f4f4f5] transition-all cursor-pointer"
+                  title="Remove image"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+                <span className="absolute bottom-1.5 left-1.5 max-w-[160px] truncate px-2 py-0.5 rounded bg-[#09090b]/80 border border-[#27272a] text-[9px] font-mono text-[#a1a1aa]">
+                  {imageName}
+                </span>
+              </div>
+            )}
+
+            <textarea
+              ref={textareaRef}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={image ? "Ask about the attached image..." : "Ask m0x-flow (AirLLM layer-by-layer or Exo P2P)..."}
+              rows={1}
+              className="w-full bg-transparent text-sm text-[#f4f4f5] placeholder-[#71717a] resize-none outline-none py-1.5 max-h-40 font-sans leading-relaxed select-text"
+            />
+          </div>
 
           {isGenerating ? (
             <button
@@ -259,7 +314,7 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!prompt.trim()}
+              disabled={(!prompt.trim() && !image) || isGenerating}
               className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#27272a] hover:bg-[#3f3f46] text-white disabled:opacity-30 transition-all shrink-0 cursor-pointer border border-[#3f3f46]"
               aria-label="Send message"
               title="Send Message"

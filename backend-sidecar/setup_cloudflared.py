@@ -1,12 +1,11 @@
 """
 Download & Setup Official Cloudflared Binary Auto-Stored inside m0x-flow
-========================================================================
+======================================================================
 Ensures cloudflared.exe is automatically bundled and stored in backend-sidecar/bin/
 so the application can run zero-configuration, properly working Cloudflare Tunnels anywhere.
 """
 
 import os
-import sys
 import urllib.request
 from pathlib import Path
 

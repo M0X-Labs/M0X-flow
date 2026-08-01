@@ -1,12 +1,10 @@
 """
 Download & Setup Official Llama.cpp CUDA Binary for Windows GPU Acceleration
-=============================================================================
+===========================================================================
 Downloads pre-compiled llama-server.exe and CUDA runtime DLLs from ggml-org/llama.cpp
 so models execute directly on NVIDIA GPUs (e.g. RTX 5080) with full VRAM allocation.
 """
 
-import os
-import sys
 import io
 import zipfile
 import urllib.request

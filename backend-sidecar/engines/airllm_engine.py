@@ -1,6 +1,6 @@
 """
 AirLLM Engine — Real NVMe Layer-by-Layer Inference
-====================================================
+==================================================
 Runs large language models on constrained VRAM by streaming model weights
 layer-by-layer from NVMe storage into GPU memory.
 
@@ -8,12 +8,9 @@ Supports both Safetensors and GGUF model formats.
 Falls back gracefully if the airllm package is not installed.
 """
 
-import os
-import sys
 import time
-import threading
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 # Try importing airllm — gracefully handle if not installed
 AIRLLM_AVAILABLE = False
@@ -33,6 +30,16 @@ try:
     TOKENIZER_AVAILABLE = True
 except ImportError:
     AutoTokenizer = None
+
+
+def _pick_main_gguf(ggufs) -> Optional[Path]:
+    """Pick the primary model GGUF, ignoring mmproj/vision projector sidecars and preferring the largest file."""
+    candidates = [g for g in ggufs if "mmproj" not in g.name.lower()]
+    if not candidates:
+        candidates = ggufs
+    if not candidates:
+        return None
+    return max(candidates, key=lambda g: g.stat().st_size)
 
 
 def _find_model_path(model_identifier: str, models_dir: Path) -> Optional[Path]:
@@ -57,8 +64,9 @@ def _find_model_path(model_identifier: str, models_dir: Path) -> Optional[Path]:
 
         # Check for GGUF files
         ggufs = list(model_path.glob("**/*.gguf"))
-        if ggufs:
-            return ggufs[0]  # Return the GGUF file directly
+        picked = _pick_main_gguf(ggufs)
+        if picked:
+            return picked  # Return the main GGUF file directly
 
         # Check for config.json (valid HF model directory)
         if (model_path / "config.json").exists():
@@ -79,7 +87,7 @@ def _find_model_path(model_identifier: str, models_dir: Path) -> Optional[Path]:
             # Return parent directory for safetensors, file for gguf
             if found[0].suffix == ".safetensors":
                 return found[0].parent
-            return found[0]
+            return _pick_main_gguf(found)
 
     return None
 

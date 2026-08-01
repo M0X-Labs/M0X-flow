@@ -22,6 +22,7 @@ import re
 import subprocess
 import asyncio
 import concurrent.futures
+import platform
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -230,7 +231,7 @@ async def lifespan(app: FastAPI):
         exo_engine_instance.stop_daemon()
     except Exception:
         pass
-    print(f"[m0x-sidecar] Backend sidecar shutting down...", flush=True)
+    print("[m0x-sidecar] Backend sidecar shutting down...", flush=True)
 
 
 app = FastAPI(
@@ -330,6 +331,7 @@ class ChatCompletionRequest(BaseModel):
     model: str
     prompt: str
     engine_mode: str = "standard"
+    image: Optional[str] = None  # base64 data URL (data:image/...;base64,...)
 
 
 @app.post("/api/models/download")
@@ -394,8 +396,9 @@ async def chat_completions(req: ChatCompletionRequest):
 
     if engine == "standard":
         curr_dir = get_current_models_dir()
-        gen_res = llama_engine_instance.generate(prompt=req.prompt, model_name=model_name, models_dir=curr_dir)
+        gen_res = llama_engine_instance.generate(prompt=req.prompt, model_name=model_name, models_dir=curr_dir, image=req.image)
         response = gen_res["content"]
+        thinking = gen_res.get("thinking")
         speed = gen_res["tokens_per_sec"]
         usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 42})
     elif engine == "airllm":
@@ -453,15 +456,13 @@ async def chat_completions(req: ChatCompletionRequest):
         "model": model_name,
         "engine": engine,
         "content": response,
+        "thinking": thinking,
         "tokens_per_sec": speed,
         "usage": usage,
     }
 
 
 # ─── System Metrics, Compatibility & Model Hosting Endpoints ────────────────
-
-import psutil
-
 
 class HostModelRequest(BaseModel):
     model_id: str
@@ -642,9 +643,6 @@ async def install_runtime_engine(req: InstallRuntimeRequest):
     except Exception as e:
         add_system_log("error", f"Failed runtime installation for {req.runtime_id}: {e}", "runtime")
         return {"status": "error", "runtime_id": req.runtime_id, "message": str(e)}
-
-
-import platform
 
 
 @app.get("/api/runtime/details")
@@ -1023,11 +1021,6 @@ async def get_system_network():
 
 # ─── Exo Pods Real LAN Discovery Endpoints ───────────────────────────────
 
-import socket
-import platform
-import subprocess
-import re
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 MANUAL_PEERS = []

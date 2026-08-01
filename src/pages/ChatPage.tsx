@@ -19,11 +19,12 @@ export function ChatPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const { setGenerating } = useRuntimeStore();
 
-  const handleSendMessage = async (text: string, model: string) => {
+  const handleSendMessage = async (text: string, model: string, image?: string) => {
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
       content: text,
+      image,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
@@ -34,6 +35,7 @@ export function ChatPage() {
     try {
       const assistantId = (Date.now() + 1).toString();
       let responseText = "";
+      let thinkingText: string | undefined;
       let speed = 52.4;
 
       // Check if this is a custom model
@@ -143,12 +145,14 @@ export function ChatPage() {
             model,
             prompt: text,
             engine_mode: engineMode,
+            image: image || null,
           }),
         }).catch(() => null);
 
         if (sidecarRes && sidecarRes.ok) {
           const data = await sidecarRes.json();
           responseText = data.content;
+          thinkingText = data.thinking || undefined;
           speed = data.tokens_per_sec || 52.4;
         } else {
           if (engineMode === "standard") {
@@ -168,6 +172,7 @@ export function ChatPage() {
         id: assistantId,
         role: "assistant",
         content: responseText,
+        thinking: thinkingText,
         engine: isCustomModel ? undefined : engineMode,
         tokensPerSec: speed,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),

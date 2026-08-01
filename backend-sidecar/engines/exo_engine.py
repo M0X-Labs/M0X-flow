@@ -10,16 +10,14 @@ and distributing model layers across pooled VRAM.
 Falls back gracefully if the exo package is not installed.
 """
 
-import os
 import sys
 import json
 import time
-import re
 import threading
 import subprocess
 import urllib.request
 import urllib.error
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 
 # Check if exo is available

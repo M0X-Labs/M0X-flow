@@ -3,8 +3,6 @@ Hugging Face Real Model Downloader Module for m0x-flow Sidecar.
 Handles real streaming file downloads from Hugging Face Hub with progress tracking.
 """
 
-import os
-import sys
 import time
 import json
 import shutil
@@ -12,7 +10,7 @@ import urllib.request
 import urllib.error
 import threading
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 try:
     from huggingface_hub import hf_hub_download

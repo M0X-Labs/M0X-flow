@@ -42,6 +42,33 @@ datas += tmp_fastapi[0]
 binaries += tmp_fastapi[1]
 hidden_imports += tmp_fastapi[2]
 
+# Exclude heavy unused dependencies (torch, scipy, etc. - only used for optional PyTorch fallback)
+excludes = [
+    "torch",
+    "torch.*",
+    "torchaudio",
+    "torchvision",
+    "tensorboard",
+    "scipy",
+    "scipy.*",
+    "matplotlib",
+    "matplotlib.*",
+    "pandas",
+    "pandas.*",
+    "PIL",
+    "PIL.*",
+    "tkinter",
+    "tkinter.*",
+    "jupyter",
+    "jupyter.*",
+    "IPython",
+    "IPython.*",
+    "notebook",
+    "notebook.*",
+    "pytest",
+    "pytest.*",
+]
+
 a = Analysis(
     ['main.py'],
     pathex=['.'],
@@ -51,7 +78,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
