@@ -119,7 +119,9 @@ export function useRuntimeStore() {
     engineMode: "standard" | "airllm" | "exo" = "standard",
     port: number = 8080,
     hostIp: string = "127.0.0.1",
-    cloudflareActive: boolean = false
+    cloudflareActive: boolean = false,
+    config: any = {},
+    serverSettings: any = {}
   ) => {
     globalHostedModel = {
       id,
@@ -134,18 +136,38 @@ export function useRuntimeStore() {
     globalMetrics = {
       ...globalMetrics,
       isRunning: true,
-      activeEngine: engineMode === "exo" ? `Exo Pods Mesh (${name})` : engineMode === "airllm" ? `AirLLM (${name})` : `Standard (${name})`,
-      vramUsedGB: engineMode === "exo" ? 20.5 : engineMode === "airllm" ? 4.2 : 8.5,
+      activeEngine: engineMode === "exo" ? `Exo Pods Mesh (${name}) — Loading...` : engineMode === "airllm" ? `AirLLM (${name}) — Loading...` : `Standard (${name}) — Loading...`,
     };
     notify();
 
     fetch("http://localhost:14321/api/model/host", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model_id: id, model_name: name, engine_mode: engineMode, port, host_ip: hostIp, cloudflare_active: cloudflareActive }),
+      body: JSON.stringify({ 
+        model_id: id, 
+        model_name: name, 
+        engine_mode: engineMode, 
+        port, 
+        host_ip: hostIp, 
+        cloudflare_active: cloudflareActive,
+        config,
+        server_settings: serverSettings
+      }),
     })
       .then((res) => res.json())
       .then((data) => {
+        // Update engine label based on actual load result
+        const loadStatus = data?.engine_load?.status || "unknown";
+        const engineLabel = loadStatus === "error"
+          ? `${engineMode === "exo" ? "Exo Pods" : engineMode === "airllm" ? "AirLLM" : "Standard"} (${name}) — Error`
+          : engineMode === "exo" ? `Exo Pods Mesh (${name})` : engineMode === "airllm" ? `AirLLM (${name})` : `Standard (${name})`;
+
+        globalMetrics = {
+          ...globalMetrics,
+          isRunning: loadStatus !== "error",
+          activeEngine: engineLabel,
+        };
+
         const realUrl = data?.tunnel?.url || data?.state?.cloudflare_url || null;
         if (cloudflareActive && realUrl) {
           globalCloudflareUrl = realUrl;
@@ -180,13 +202,11 @@ export function useRuntimeStore() {
     globalIsGenerating = isGen;
     if (isGen) {
       const mode = engine || globalEngineMode;
-      const spd = speed || (mode === "airllm" ? 14.8 : mode === "exo" ? 44.1 : 52.4);
       globalMetrics = {
         ...globalMetrics,
         isRunning: true,
-        tokensPerSec: spd,
+        tokensPerSec: speed || globalMetrics.tokensPerSec,
         activeEngine: mode === "exo" ? `Exo Pods Mesh (${modelName || "Generating..."})` : mode === "airllm" ? `AirLLM (${modelName || "Generating..."})` : `Standard (${modelName || "Generating..."})`,
-        vramUsedGB: mode === "exo" ? 20.5 : mode === "airllm" ? 4.2 : 8.5,
       };
     } else {
       if (!globalHostedModel) {
