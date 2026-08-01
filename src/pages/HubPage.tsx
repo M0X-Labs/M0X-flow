@@ -224,32 +224,38 @@ export function HubPage() {
   });
 
   return (
-    <div className="flex flex-col h-full p-6 gap-6 overflow-y-auto bg-[#09090b]">
+    <div className="flex flex-col h-full p-6 gap-6 overflow-y-auto bg-[#0b0b0e] text-[#e4e4e7] relative select-none">
+      {/* Ambient Background Glows */}
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
       {/* Header Title & Subtitle */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5]">
-              <Layers className="w-4 h-4" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shadow-inner">
+              <Layers className="w-5 h-5" />
             </div>
-            <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">
-              Model Hub
-            </h1>
+            <div>
+              <h1 className="text-xl font-bold text-white tracking-tight">
+                Model Hub
+              </h1>
+              <p className="text-xs text-zinc-400 font-sans">
+                Real open-weight AI models streamed live from Hugging Face Hub for AirLLM disk offloading or Exo P2P clusters.
+              </p>
+            </div>
           </div>
-          <p className="text-xs text-[#a1a1aa] mt-1 font-sans">
-            Real open-weight AI models streamed live from Hugging Face Hub for AirLLM disk offloading or Exo P2P clusters.
-          </p>
         </div>
 
         {/* Search Input Bar */}
         <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 text-[#71717a] absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search Hugging Face models..."
-            className="w-full pl-10 pr-3.5 py-2 rounded-xl bg-[#121215] border border-[#27272a] text-xs text-[#f4f4f5] placeholder-[#71717a] focus:outline-none focus:border-[#3f3f46] transition-all font-sans"
+            className="w-full pl-10 pr-4 py-2 bg-[#121216] border border-[#27272a] focus:border-blue-500 text-xs text-white placeholder-zinc-500 rounded-xl outline-none transition-all shadow-sm"
           />
         </div>
       </div>

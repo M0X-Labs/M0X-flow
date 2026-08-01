@@ -233,28 +233,32 @@ export function RuntimePage() {
   });
 
   return (
-    <div className="flex flex-col h-full bg-[#09090b] text-[#f4f4f5] overflow-y-auto font-sans select-none">
+    <div className="flex flex-col h-full bg-[#0b0b0e] text-[#e4e4e7] overflow-y-auto font-sans select-none relative">
+      {/* Ambient Background Glows */}
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
       {/* Top Header Bar */}
-      <div className="p-4 border-b border-[#27272a] bg-[#121215] flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-emerald-400">
-            <Settings2 className="w-4.5 h-4.5" />
+      <div className="p-5 border-b border-[#27272a] bg-[#121216]/90 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0 z-20 shadow-sm">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-inner">
+            <Settings2 className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">Runtime & Hardware Manager</h1>
-            <p className="text-xs text-[#a1a1aa] font-sans">
+            <h1 className="text-xl font-bold text-white tracking-tight">Runtime & Hardware Manager</h1>
+            <p className="text-xs text-zinc-400 font-sans">
               Configure AI inference runtimes, CUDA GPU offload parameters, hardware limits, and live execution console logs.
             </p>
           </div>
         </div>
 
         {/* Tab Navigation Switches */}
-        <div className="flex items-center rounded-xl bg-[#18181c] border border-[#27272a] p-1">
+        <div className="flex items-center rounded-2xl bg-[#18181c] border border-[#27272a] p-1.5 shadow-inner">
           <button
             type="button"
             onClick={() => setActiveTab("runtimes")}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "runtimes" ? "bg-[#27272a] text-white border border-[#3f3f46]" : "text-[#a1a1aa] hover:text-[#f4f4f5]"
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer active:scale-95 ${
+              activeTab === "runtimes" ? "bg-[#27272a] text-white border border-[#3f3f46] shadow-md" : "text-zinc-400 hover:text-white"
             }`}
           >
             <Layers className="w-3.5 h-3.5 text-emerald-400" />
@@ -264,8 +268,8 @@ export function RuntimePage() {
           <button
             type="button"
             onClick={() => setActiveTab("hardware")}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "hardware" ? "bg-[#27272a] text-white border border-[#3f3f46]" : "text-[#a1a1aa] hover:text-[#f4f4f5]"
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer active:scale-95 ${
+              activeTab === "hardware" ? "bg-[#27272a] text-white border border-[#3f3f46] shadow-md" : "text-zinc-400 hover:text-white"
             }`}
           >
             <Cpu className="w-3.5 h-3.5 text-blue-400" />
@@ -275,8 +279,8 @@ export function RuntimePage() {
           <button
             type="button"
             onClick={() => setActiveTab("logs")}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "logs" ? "bg-[#27272a] text-white border border-[#3f3f46]" : "text-[#a1a1aa] hover:text-[#f4f4f5]"
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer active:scale-95 ${
+              activeTab === "logs" ? "bg-[#27272a] text-white border border-[#3f3f46] shadow-md" : "text-zinc-400 hover:text-white"
             }`}
           >
             <Terminal className="w-3.5 h-3.5 text-amber-400" />

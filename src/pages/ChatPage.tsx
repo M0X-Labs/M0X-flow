@@ -187,24 +187,33 @@ export function ChatPage() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#09090b]">
-      {/* Top Engine Selector */}
-      <EngineToggle mode={engineMode} onModeChange={setEngineMode} />
+    <div className="flex flex-col h-full bg-[#0b0b0e] text-[#e4e4e7] font-sans select-none overflow-hidden relative">
+      {/* Subtle Ambient Glow Backdrops */}
+      <div className="absolute top-0 left-1/3 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Top Engine Selector Header */}
+      <div className="relative z-20 shadow-sm border-b border-[#27272a] bg-[#121216]/80 backdrop-blur-md">
+        <EngineToggle mode={engineMode} onModeChange={setEngineMode} />
+      </div>
 
       {/* Main Message Stream */}
-      <ChatWindow
-        messages={messages}
-        isGenerating={isGenerating}
-        onSelectStarter={(promptText) => handleSendMessage(promptText, "selected-model")}
-      />
+      <div className="flex-1 overflow-hidden relative z-10">
+        <ChatWindow
+          messages={messages}
+          isGenerating={isGenerating}
+          onSelectStarter={(promptText) => handleSendMessage(promptText, "selected-model")}
+        />
+      </div>
 
-
-      {/* Bottom Floating Prompt Area */}
-      <PromptInput
-        onSendMessage={handleSendMessage}
-        onStopGeneration={handleStopGeneration}
-        isGenerating={isGenerating}
-      />
+      {/* Bottom Floating Prompt Input */}
+      <div className="relative z-20 p-4 bg-[#0b0b0e]/90 backdrop-blur-md border-t border-[#27272a]/60">
+        <PromptInput
+          onSendMessage={handleSendMessage}
+          onStopGeneration={handleStopGeneration}
+          isGenerating={isGenerating}
+        />
+      </div>
     </div>
   );
 }

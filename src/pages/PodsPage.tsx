@@ -199,31 +199,35 @@ export function PodsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#09090b] overflow-hidden relative">
+    <div className="flex flex-col h-full bg-[#0b0b0e] text-[#e4e4e7] overflow-hidden relative select-none">
+      {/* Ambient Background Glows */}
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
       {/* Header Bar */}
-      <div className="p-4 border-b border-[#27272a] bg-[#121215] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+      <div className="p-5 border-b border-[#27272a] bg-[#121216]/90 backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 shrink-0 z-20 shadow-sm">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5]">
-              <Network className="w-4 h-4 text-emerald-400" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-inner">
+              <Network className="w-5 h-5" />
             </div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold text-white tracking-tight">
                 Exo P2P Pods Topology
               </h1>
               {isExoHosted ? (
-                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-sm">
                   HOSTING: {hostedModel?.name}
                 </span>
               ) : (
-                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#18181c] text-[#71717a] border border-[#27272a]">
+                <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-[#18181c] text-zinc-400 border border-[#27272a]">
                   STANDBY (NO MODEL HOSTED)
                 </span>
               )}
             </div>
           </div>
-          <p className="text-xs text-[#a1a1aa] mt-1 font-sans">
-            Real LAN & Wi-Fi device discovery pooling VRAM across local network nodes for distributed LLM inference.
+          <p className="text-xs text-zinc-400 mt-1 font-sans">
+            Real peer-to-peer hardware mesh pooling GPU memory across local network nodes.
           </p>
         </div>
 

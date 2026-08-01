@@ -95,27 +95,33 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full p-6 gap-6 overflow-y-auto bg-[#09090b]">
+    <div className="flex flex-col h-full p-6 gap-6 overflow-y-auto bg-[#0b0b0e] text-[#e4e4e7] relative select-none">
+      {/* Ambient Background Glows */}
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
       {/* Header Title */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between relative z-10">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5]">
-              <Settings className="w-4 h-4" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shadow-inner">
+              <Settings className="w-5 h-5" />
             </div>
-            <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">
-              System Preferences
-            </h1>
+            <div>
+              <h1 className="text-xl font-bold text-white tracking-tight">
+                System Preferences
+              </h1>
+              <p className="text-xs text-zinc-400 font-sans">
+                Configure m0x-flow engine parameters, model storage locations, and local sidecar ports.
+              </p>
+            </div>
           </div>
-          <p className="text-xs text-[#a1a1aa] mt-1 font-sans">
-            Configure m0x-flow engine parameters, model storage locations, and local sidecar ports.
-          </p>
         </div>
 
         <button
           type="button"
           onClick={handleSave}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#27272a] hover:bg-[#3f3f46] text-white text-xs font-bold transition-all border border-[#3f3f46] cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold transition-all shadow-md active:scale-95 cursor-pointer border border-blue-400/30"
         >
           <Check className="w-4 h-4" />
           <span>{saved ? "Preferences Saved!" : "Save Changes"}</span>
