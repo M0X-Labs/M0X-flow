@@ -101,6 +101,21 @@ class LlamaEngine:
                     return f
         return None
 
+    @staticmethod
+    def find_mtp_draft_file(gguf_file: Optional[Path]) -> Optional[Path]:
+        """Locate an MTP (Multi-Token Prediction / Speculative Decoding draft) GGUF file next to the main model file."""
+        if not gguf_file:
+            return None
+        for search_dir in [gguf_file.parent, gguf_file.parent.parent]:
+            if not search_dir.exists():
+                continue
+            for f in search_dir.glob("*.gguf"):
+                if f.is_file() and f != gguf_file:
+                    fn = f.name.lower()
+                    if "mtp" in fn or "draft" in fn or "speculative" in fn:
+                        return f
+        return None
+
     def find_gguf_file(self, model_identifier: str, models_dir: Path) -> Optional[Path]:
         """Resolve exact .gguf file path from model identifier or models directory."""
         if not models_dir.exists():
@@ -173,8 +188,54 @@ class LlamaEngine:
                     cmd.extend(["-b", str(cfg["evalBatchSize"])])
                 if cfg.get("physicalBatchSize"):
                     cmd.extend(["-ub", str(cfg["physicalBatchSize"])])
-                if cfg.get("flashAttention", True):
-                    cmd.extend(["-fa", "auto"])
+
+                # Flash Attention flag
+                fa_val = cfg.get("flashAttention", True)
+                if fa_val is True or fa_val == "auto" or fa_val == "on":
+                    cmd.extend(["-fa"])
+                elif fa_val is False or fa_val == "off":
+                    cmd.extend(["--no-flash-attn"])
+
+                # Check for MTP / Speculative Decoding draft model file
+                mtp_file = self.find_mtp_draft_file(gguf_file)
+                if cfg.get("mtpSpeculativeDecoding", True) and mtp_file:
+                    cmd.extend(["-md", str(mtp_file.resolve())])
+                    if cfg.get("mtpMaxDraftTokens"):
+                        cmd.extend(["--draft-max", str(cfg["mtpMaxDraftTokens"])])
+                    if cfg.get("mtpMinDraftTokens"):
+                        cmd.extend(["--draft-min", str(cfg["mtpMinDraftTokens"])])
+                    add_system_log("info", f"MTP Speculative Decoding draft model loaded: {mtp_file.name}", "llama-server")
+
+                # Seed flag
+                if not cfg.get("randomSeed", True) and cfg.get("seed") and str(cfg["seed"]).strip() not in ["", "Random Seed"]:
+                    cmd.extend(["-s", str(cfg["seed"])])
+
+                # RoPE Positional Scaling
+                if not cfg.get("autoRopeBase", True) and cfg.get("ropeFrequencyBase") and float(cfg["ropeFrequencyBase"]) > 0:
+                    cmd.extend(["--rope-freq-base", str(cfg["ropeFrequencyBase"])])
+                if not cfg.get("autoRopeScale", True) and cfg.get("ropeFrequencyScale") and float(cfg["ropeFrequencyScale"]) > 0:
+                    cmd.extend(["--rope-freq-scale", str(cfg["ropeFrequencyScale"])])
+
+                # KV Cache Quantization
+                if cfg.get("enableKQuant", True):
+                    k_quant = str(cfg.get("kCacheQuantType", "Q4_0")).lower()
+                    if k_quant and k_quant != "f16":
+                        cmd.extend(["--cache-type-k", k_quant])
+                if cfg.get("enableVQuant", True):
+                    v_quant = str(cfg.get("vCacheQuantType", "Q4_0")).lower()
+                    if v_quant and v_quant != "f16":
+                        cmd.extend(["--cache-type-v", v_quant])
+
+                # Parallel sequences
+                if cfg.get("maxConcurrentPredictions"):
+                    cmd.extend(["-np", str(cfg["maxConcurrentPredictions"])])
+
+                # Memory management
+                if cfg.get("tryMmap") is False:
+                    cmd.extend(["--no-mmap"])
+                if cfg.get("keepModelInMemory") is True:
+                    cmd.extend(["--mlock"])
+
                 if srv.get("requireAuth", False):
                     cmd.extend(["--api-key", "m0x-secret"])
 
@@ -292,7 +353,7 @@ class LlamaEngine:
         self.active_model_name = None
         self.backend_type = "none"
 
-    def generate(self, prompt: str, model_name: str, models_dir: Optional[Path] = None, max_tokens: int = 512, temperature: float = 0.7, image: Optional[str] = None) -> Dict[str, Any]:
+    def generate(self, prompt: str, model_name: str, models_dir: Optional[Path] = None, max_tokens: int = 512, temperature: float = 0.7, top_k: Optional[int] = None, top_p: Optional[float] = None, repeat_penalty: Optional[float] = None, image: Optional[str] = None) -> Dict[str, Any]:
         """Execute text (or vision) completion across active backend."""
         start_time = time.time()
         add_system_log("info", f"Processing chat completion prompt: \"{prompt[:60]}...\"", "engine")
@@ -310,12 +371,21 @@ class LlamaEngine:
                 if image:
                     user_content.append({"type": "image_url", "image_url": {"url": image}})
                 messages = [{"role": "user", "content": user_content if image else prompt}]
-                req_data = json.dumps({
+                
+                payload = {
                     "model": model_name,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature
-                }).encode("utf-8")
+                }
+                if top_k is not None:
+                    payload["top_k"] = top_k
+                if top_p is not None:
+                    payload["top_p"] = top_p
+                if repeat_penalty is not None:
+                    payload["repeat_penalty"] = repeat_penalty
+
+                req_data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))

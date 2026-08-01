@@ -11,6 +11,11 @@ export interface RealModel {
   isDownloading?: boolean;
   downloadProgress?: number;
   downloadSpeed?: string;
+  size_gb?: number;
+  ram_needed_gb?: number;
+  vram_needed_gb?: number;
+  context_window?: number;
+  parameter_size?: string;
 }
 
 export interface CustomModel {
@@ -82,6 +87,11 @@ export function useModelStore() {
               name: m.name,
               repo: m.id,
               downloaded: true,
+              size_gb: m.size_gb,
+              ram_needed_gb: m.ram_needed_gb,
+              vram_needed_gb: m.vram_needed_gb,
+              context_window: m.context_window,
+              parameter_size: m.parameter_size,
             }));
             setDownloadedModels(sidecarModels);
             saveStoredModels(sidecarModels);

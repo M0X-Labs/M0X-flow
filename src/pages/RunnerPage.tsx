@@ -25,7 +25,9 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
-  ExternalLink
+  ExternalLink,
+  HelpCircle,
+  RotateCcw
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRuntimeStore } from "@/lib/useRuntimeStore";
@@ -33,6 +35,8 @@ import { useModelStore } from "@/lib/useModelStore";
 import { LiveConsoleLog } from "@/components/runtime/LiveConsoleLog";
 
 export interface ModelLoadConfig {
+  apiIdentifier: string;
+  autoUnloadIdle: boolean;
   contextLength: number;
   gpuOffloadLayers: number;
   cpuThreads: number;
@@ -40,42 +44,62 @@ export interface ModelLoadConfig {
   physicalBatchSize: number;
   maxConcurrentPredictions: number;
   unifiedKvCache: boolean;
+  autoRopeBase: boolean;
   ropeFrequencyBase: number;
+  autoRopeScale: boolean;
   ropeFrequencyScale: number;
   offloadKvCacheGpu: boolean;
   keepModelInMemory: boolean;
   tryMmap: boolean;
+  randomSeed: boolean;
   seed: string;
   mtpSpeculativeDecoding: boolean;
   mtpMaxDraftTokens: number;
   mtpMinDraftTokens: number;
   flashAttention: boolean;
+  enableKQuant: boolean;
   kCacheQuantType: "Q4_0" | "Q8_0" | "F16";
+  enableVQuant: boolean;
   vCacheQuantType: "Q4_0" | "Q8_0" | "F16";
+  temperature: number;
+  topK: number;
+  topP: number;
+  repeatPenalty: number;
   rememberSettings: boolean;
   showAdvanced: boolean;
 }
 
 const DEFAULT_CONFIG: ModelLoadConfig = {
+  apiIdentifier: "",
+  autoUnloadIdle: false,
   contextLength: 131072,
-  gpuOffloadLayers: 99,
-  cpuThreads: 12,
+  gpuOffloadLayers: 42,
+  cpuThreads: 1,
   evalBatchSize: 2048,
   physicalBatchSize: 512,
   maxConcurrentPredictions: 4,
   unifiedKvCache: true,
+  autoRopeBase: true,
   ropeFrequencyBase: 0,
+  autoRopeScale: true,
   ropeFrequencyScale: 0,
   offloadKvCacheGpu: true,
   keepModelInMemory: true,
   tryMmap: true,
+  randomSeed: true,
   seed: "Random Seed",
   mtpSpeculativeDecoding: true,
   mtpMaxDraftTokens: 4,
   mtpMinDraftTokens: 0,
   flashAttention: true,
+  enableKQuant: true,
   kCacheQuantType: "Q4_0",
+  enableVQuant: true,
   vCacheQuantType: "Q4_0",
+  temperature: 0.7,
+  topK: 40,
+  topP: 0.9,
+  repeatPenalty: 1.1,
   rememberSettings: true,
   showAdvanced: true,
 };
@@ -146,11 +170,13 @@ export function RunnerPage() {
       return downloadedModels.map((m) => ({
         id: m.id,
         name: m.name,
-        parameterSize: m.name.includes("27B") ? "27B" : m.name.includes("9B") ? "9B" : "7B-70B",
+        parameterSize: m.parameter_size || (m.name.includes("27B") ? "27B" : m.name.includes("9B") ? "9B" : "7B-70B"),
         weightFormat: m.name.includes("GGUF") ? "GGUF" : "Safetensors",
         quantization: "Q4_K_M",
-        maxContext: 131072,
-        baseSizeGb: (m as any).size_gb || 4.8,
+        maxContext: m.context_window || 131072,
+        baseSizeGb: m.size_gb || 4.8,
+        ramNeededGb: m.ram_needed_gb || (m.size_gb ? m.size_gb + 2.5 : 7.3),
+        vramNeededGb: m.vram_needed_gb || (m.size_gb ? m.size_gb + 1.5 : 6.3),
       }));
     }
     return [];
@@ -161,9 +187,32 @@ export function RunnerPage() {
   const [config, setConfig] = useState<ModelLoadConfig>(DEFAULT_CONFIG);
   const [isLaunching, setIsLaunching] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [hasMtpFile, setHasMtpFile] = useState(false);
 
   const activeModel = realModels.find((m) => m.id === selectedModelId) || realModels[0];
   const isCurrentlyLoaded = Boolean(hostedModel && hostedModel.id);
+
+  // Check if selected model has an MTP file/folder on backend
+  useEffect(() => {
+    const targetId = selectedModelId || activeModel?.id;
+    if (!targetId) return;
+    const modelObj = downloadedModels.find((m) => m.id === targetId || m.name === targetId);
+
+    fetch(`http://localhost:14321/api/model/check-mtp?model_id=${encodeURIComponent(targetId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setHasMtpFile(Boolean(data?.has_mtp) || Boolean((modelObj as any)?.has_mtp));
+      })
+      .catch(() => {
+        const name = (activeModel?.name || targetId).toLowerCase();
+        setHasMtpFile(
+          name.includes("mtp") ||
+          name.includes("draft") ||
+          name.includes("speculative") ||
+          Boolean((modelObj as any)?.has_mtp)
+        );
+      });
+  }, [selectedModelId, activeModel, downloadedModels]);
 
   const reachableUrl = useMemo(() => {
     if (accessMode === "cloudflare" && activeCloudflareUrl) {
@@ -248,6 +297,16 @@ export function RunnerPage() {
       setIsLaunching(false);
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && showWizard && !isLaunching) {
+        handleLaunchModel();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showWizard, isLaunching, handleLaunchModel]);
 
   return (
     <div className="flex flex-col h-full bg-[#0b0b0e] text-[#e4e4e7] font-sans select-none overflow-hidden relative">
@@ -859,14 +918,25 @@ export function RunnerPage() {
                                   : "bg-[#18181c] border-[#27272a] text-zinc-400 hover:border-[#3f3f46] hover:bg-[#1e1e24]"
                               }`}
                             >
-                              <div className="space-y-1">
+                              <div className="space-y-1.5 flex-1 pr-4">
                                 <div className="text-xs font-bold text-white">{m.name}</div>
                                 <div className="text-[10px] font-mono text-zinc-500">{m.id}</div>
+                                <div className="flex flex-wrap items-center gap-2 mt-1">
+                                  <span className="text-[9px] uppercase tracking-wider font-semibold text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded">
+                                    Size: {m.baseSizeGb} GB
+                                  </span>
+                                  <span className="text-[9px] uppercase tracking-wider font-semibold text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded">
+                                    RAM: {m.ramNeededGb} GB
+                                  </span>
+                                  <span className="text-[9px] uppercase tracking-wider font-semibold text-purple-400 bg-purple-400/10 px-1.5 py-0.5 rounded">
+                                    VRAM: {m.vramNeededGb} GB
+                                  </span>
+                                  <span className="text-[9px] uppercase tracking-wider font-semibold text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">
+                                    CTX: {m.maxContext >= 1000000 ? `${(m.maxContext / 1000000).toFixed(1)}M` : m.maxContext >= 1000 ? `${Math.round(m.maxContext / 1000)}K` : m.maxContext}
+                                  </span>
+                                </div>
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="text-[10px] font-mono bg-[#101014] px-2.5 py-1 rounded-md border border-[#27272a] text-emerald-400 font-semibold">
-                                  {m.baseSizeGb} GB
-                                </span>
                                 {isSelected && <Check className="w-4 h-4 text-emerald-400" />}
                               </div>
                             </div>
@@ -976,42 +1046,540 @@ export function RunnerPage() {
                   </div>
                 )}
 
-                {/* STEP 3: Hardware Tuning */}
+                {/* STEP 3: Full Model Runner Configuration matching reference UI */}
                 {wizardStep === 3 && (
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="text-sm font-bold text-white tracking-tight">Hardware & VRAM Offloading</h4>
-                      <p className="text-xs text-zinc-400">{engineMode === "airllm" ? "AirLLM manages layer loading automatically." : "Adjust GPU Offload Layers."}</p>
+                  <div className="space-y-4 text-xs font-sans">
+                    {/* Header: Model Title + Estimated Memory Usage Chips */}
+                    <div className="flex items-center justify-between pb-3 border-b border-[#27272a]">
+                      <div>
+                        <h3 className="text-base font-bold text-white tracking-tight">{activeModel?.name || "Max"}</h3>
+                        <p className="text-[11px] text-zinc-400">Configure engine runtime and model parameters</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-zinc-400 flex items-center gap-1">
+                          Estimated Memory Usage <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Beta</span>
+                        </span>
+                        <span className="bg-[#27272a] text-zinc-200 text-[11px] font-mono px-2 py-1 rounded-md border border-zinc-700">
+                          GPU <strong className="text-white">8.07 GB</strong>
+                        </span>
+                        <span className="bg-[#27272a] text-zinc-200 text-[11px] font-mono px-2 py-1 rounded-md border border-zinc-700">
+                          Total <strong className="text-white">8.07 GB</strong>
+                        </span>
+                      </div>
                     </div>
 
-                    <div className={`p-5 rounded-2xl bg-[#18181c] border border-[#27272a] space-y-4 ${engineMode === "airllm" ? "opacity-50 pointer-events-none" : ""}`}>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="font-semibold text-white">GPU Offload Layers (-ngl)</span>
-                        <span className="font-mono text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">{config.gpuOffloadLayers} Layers</span>
+                    {/* Scrollable Form Body */}
+                    <div className="space-y-3.5 max-h-[55vh] overflow-y-auto pr-2 custom-scrollbar">
+                      {/* 1. API Identifier */}
+                      <div className="space-y-1">
+                        <label className="font-semibold text-zinc-200">API Identifier</label>
+                        <p className="text-[11px] text-zinc-400">Optionally provide an identifier for this model. This will be used in API requests. Leave blank to use the default identifier.</p>
+                        <input
+                          type="text"
+                          placeholder={activeModel?.id || "max"}
+                          value={config.apiIdentifier}
+                          onChange={(e) => setConfig((prev) => ({ ...prev, apiIdentifier: e.target.value }))}
+                          className="w-full bg-[#18181c] border border-[#27272a] focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
+                        />
                       </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={99}
-                        value={config.gpuOffloadLayers}
-                        onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value))}
-                        className="w-full accent-emerald-500 cursor-pointer"
-                        disabled={engineMode === "airllm"}
-                      />
+
+                      {/* 2. Auto Unload If Idle (TTL) */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] space-y-1">
+                        <div className="flex items-center justify-between">
+                          <label className="font-semibold text-zinc-200 flex items-center gap-2">
+                            <span>Auto Unload If Idle (TTL)</span>
+                            <input
+                              type="checkbox"
+                              checked={config.autoUnloadIdle}
+                              onChange={(e) => setConfig((prev) => ({ ...prev, autoUnloadIdle: e.target.checked }))}
+                              className="accent-blue-500 cursor-pointer"
+                            />
+                          </label>
+                        </div>
+                        <p className="text-[11px] text-zinc-400">If set, the model will be automatically unloaded after being idle for the specified amount of time.</p>
+                      </div>
+
+                      {/* 3. Context Length */}
+                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-200">Context Length</span>
+                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleNumberChange("contextLength", 131072)}
+                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                              title="Reset to default"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              value={config.contextLength}
+                              onChange={(e) => handleNumberChange("contextLength", Number(e.target.value))}
+                              className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                            />
+                          </div>
+                        </div>
+                        <div className="text-[11px] text-zinc-400 flex items-center gap-1">
+                          Model supports up to <span className="bg-[#27272a] text-zinc-200 font-mono px-1.5 py-0.5 rounded text-[10px]">131072</span> tokens
+                        </div>
+                        <input
+                          type="range"
+                          min={512}
+                          max={131072}
+                          step={512}
+                          value={config.contextLength}
+                          onChange={(e) => handleNumberChange("contextLength", Number(e.target.value))}
+                          className="w-full accent-blue-500 cursor-pointer"
+                        />
+                      </div>
+
+                      {/* 4. GPU Offload */}
+                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-200">GPU Offload</span>
+                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          </div>
+                          <input
+                            type="number"
+                            value={config.gpuOffloadLayers}
+                            onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value))}
+                            className="w-20 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                          />
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={99}
+                          value={config.gpuOffloadLayers}
+                          onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value))}
+                          className="w-full accent-blue-500 cursor-pointer"
+                        />
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
+                          <span className="flex items-center gap-1">
+                            💡 Model offload limited to dedicated GPU memory. Actual number of offloaded layers may differ
+                          </span>
+                          <button type="button" className="text-zinc-300 hover:text-white flex items-center gap-1 border border-zinc-700 px-2 py-0.5 rounded bg-zinc-800/60 cursor-pointer">
+                            GPU Settings <ExternalLink className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 5. CPU Thread Pool Size */}
+                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-200">CPU Thread Pool Size</span>
+                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleNumberChange("cpuThreads", 1)}
+                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                              title="Reset to default"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              value={config.cpuThreads}
+                              onChange={(e) => handleNumberChange("cpuThreads", Number(e.target.value))}
+                              className="w-20 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                            />
+                          </div>
+                        </div>
+                        <input
+                          type="range"
+                          min={1}
+                          max={32}
+                          value={config.cpuThreads}
+                          onChange={(e) => handleNumberChange("cpuThreads", Number(e.target.value))}
+                          className="w-full accent-blue-500 cursor-pointer"
+                        />
+                      </div>
+
+                      {/* 6. Evaluation Batch Size */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Evaluation Batch Size</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                        </div>
+                        <input
+                          type="number"
+                          value={config.evalBatchSize}
+                          onChange={(e) => handleNumberChange("evalBatchSize", Number(e.target.value))}
+                          className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                        />
+                      </div>
+
+                      {/* 7. Physical Batch Size */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Physical Batch Size</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                        </div>
+                        <input
+                          type="number"
+                          value={config.physicalBatchSize}
+                          onChange={(e) => handleNumberChange("physicalBatchSize", Number(e.target.value))}
+                          className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                        />
+                      </div>
+
+                      {/* 8. Max Concurrent Predictions */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Max Concurrent Predictions</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                        </div>
+                        <input
+                          type="number"
+                          value={config.maxConcurrentPredictions}
+                          onChange={(e) => handleNumberChange("maxConcurrentPredictions", Number(e.target.value))}
+                          className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                        />
+                      </div>
+
+                      {/* 9. Unified KV Cache */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Unified KV Cache</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setConfig((prev) => ({ ...prev, unifiedKvCache: !prev.unifiedKvCache }))}
+                          className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                            config.unifiedKvCache ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                          }`}
+                        >
+                          <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                        </button>
+                      </div>
+
+                      {/* 10. RoPE Frequency Base */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">RoPE Frequency Base</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          <input
+                            type="checkbox"
+                            checked={config.autoRopeBase}
+                            onChange={(e) => setConfig((prev) => ({ ...prev, autoRopeBase: e.target.checked }))}
+                            className="accent-blue-500 cursor-pointer"
+                          />
+                        </div>
+                        <span className="text-xs text-zinc-400 font-mono">
+                          {config.autoRopeBase ? "Auto" : config.ropeFrequencyBase}
+                        </span>
+                      </div>
+
+                      {/* 11. RoPE Frequency Scale */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">RoPE Frequency Scale</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          <input
+                            type="checkbox"
+                            checked={config.autoRopeScale}
+                            onChange={(e) => setConfig((prev) => ({ ...prev, autoRopeScale: e.target.checked }))}
+                            className="accent-blue-500 cursor-pointer"
+                          />
+                        </div>
+                        <span className="text-xs text-zinc-400 font-mono">
+                          {config.autoRopeScale ? "Auto" : config.ropeFrequencyScale}
+                        </span>
+                      </div>
+
+                      {/* 12. Offload KV Cache to GPU Memory */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Offload KV Cache to GPU Memory</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setConfig((prev) => ({ ...prev, offloadKvCacheGpu: !prev.offloadKvCacheGpu }))}
+                          className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                            config.offloadKvCacheGpu ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                          }`}
+                        >
+                          <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                        </button>
+                      </div>
+
+                      {/* 13. Keep Model in Memory */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Keep Model in Memory</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setConfig((prev) => ({ ...prev, keepModelInMemory: !prev.keepModelInMemory }))}
+                          className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                            config.keepModelInMemory ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                          }`}
+                        >
+                          <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                        </button>
+                      </div>
+
+                      {/* 14. Try mmap() */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Try mmap()</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setConfig((prev) => ({ ...prev, tryMmap: !prev.tryMmap }))}
+                          className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                            config.tryMmap ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                          }`}
+                        >
+                          <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                        </button>
+                      </div>
+
+                      {/* 15. Seed */}
+                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Seed</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          <input
+                            type="checkbox"
+                            checked={config.randomSeed}
+                            onChange={(e) => setConfig((prev) => ({ ...prev, randomSeed: e.target.checked }))}
+                            className="accent-blue-500 cursor-pointer"
+                          />
+                        </div>
+                        <span className="text-xs text-zinc-400 font-mono">
+                          {config.randomSeed ? "Random Seed" : config.seed}
+                        </span>
+                      </div>
+
+                      {/* 16. Flash Attention */}
+                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">Flash Attention</span>
+                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setConfig((prev) => ({ ...prev, flashAttention: true }))}
+                            className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                            title="Reset to default"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfig((prev) => ({ ...prev, flashAttention: !prev.flashAttention }))}
+                            className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                              config.flashAttention ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                            }`}
+                          >
+                            <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 17. K Cache Quantization Type */}
+                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-200">K Cache Quantization Type</span>
+                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                            <input
+                              type="checkbox"
+                              checked={config.enableKQuant}
+                              onChange={(e) => setConfig((prev) => ({ ...prev, enableKQuant: e.target.checked }))}
+                              className="accent-blue-500 cursor-pointer"
+                            />
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                            <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfig((prev) => ({ ...prev, kCacheQuantType: "Q4_0" }))}
+                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                              title="Reset to default"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                            <select
+                              value={config.kCacheQuantType}
+                              onChange={(e) => setConfig((prev) => ({ ...prev, kCacheQuantType: e.target.value as any }))}
+                              className="bg-[#101014] border border-[#27272a] rounded-lg px-3 py-1 text-xs text-white font-mono cursor-pointer"
+                            >
+                              <option value="Q4_0">Q4_0</option>
+                              <option value="Q8_0">Q8_0</option>
+                              <option value="F16">F16</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 18. V Cache Quantization Type */}
+                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-200">V Cache Quantization Type</span>
+                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                            <input
+                              type="checkbox"
+                              checked={config.enableVQuant}
+                              onChange={(e) => setConfig((prev) => ({ ...prev, enableVQuant: e.target.checked }))}
+                              className="accent-blue-500 cursor-pointer"
+                            />
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                            <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfig((prev) => ({ ...prev, vCacheQuantType: "Q4_0" }))}
+                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                              title="Reset to default"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                            <select
+                              value={config.vCacheQuantType}
+                              onChange={(e) => setConfig((prev) => ({ ...prev, vCacheQuantType: e.target.value as any }))}
+                              className="bg-[#101014] border border-[#27272a] rounded-lg px-3 py-1 text-xs text-white font-mono cursor-pointer"
+                            >
+                              <option value="Q4_0">Q4_0</option>
+                              <option value="Q8_0">Q8_0</option>
+                              <option value="F16">F16</option>
+                            </select>
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-zinc-400 pt-1">
+                          KV Cache Quantization is an experimental feature that may cause issues with some models. Flash Attention must be enabled for V cache quantization. If you encounter problems, reset to the default "F16".
+                        </p>
+                      </div>
+
+                      {/* 19. MTP Speculative Decoding (Draft Model Acceleration) — Shown ONLY if MTP file exists */}
+                      {hasMtpFile && (
+                        <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-200">MTP Speculative Decoding</span>
+                              <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                              <span className="bg-purple-900/40 text-purple-300 text-[10px] px-1.5 py-0.5 rounded border border-purple-700/50">MTP Draft Detected</span>
+                              <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setConfig((prev) => ({ ...prev, mtpSpeculativeDecoding: !prev.mtpSpeculativeDecoding }))}
+                              className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                                config.mtpSpeculativeDecoding ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                              }`}
+                            >
+                              <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                            </button>
+                          </div>
+                          <p className="text-[11px] text-zinc-400">
+                            Auto-detects and loads accompanying MTP draft model (.gguf) sidecar file for 2x-3x faster token generation via speculative decoding.
+                          </p>
+                          {config.mtpSpeculativeDecoding && (
+                            <div className="grid grid-cols-2 gap-3 pt-1">
+                              <div>
+                                <label className="text-[11px] text-zinc-400 mb-1 block font-medium">Max Draft Tokens:</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={16}
+                                  value={config.mtpMaxDraftTokens}
+                                  onChange={(e) => handleNumberChange("mtpMaxDraftTokens", Number(e.target.value))}
+                                  className="w-full bg-[#101014] border border-[#27272a] rounded-lg px-2.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[11px] text-zinc-400 mb-1 block font-medium">Min Draft Tokens:</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={8}
+                                  value={config.mtpMinDraftTokens}
+                                  onChange={(e) => handleNumberChange("mtpMinDraftTokens", Number(e.target.value))}
+                                  className="w-full bg-[#101014] border border-[#27272a] rounded-lg px-2.5 py-1 text-xs text-white font-mono"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    {engineMode === "airllm" && (
-                      <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2">
-                        <HardDrive className="w-3.5 h-3.5 shrink-0" />
-                        <span>AirLLM handles GPU layer management automatically — only 1 layer at a time is loaded into VRAM from NVMe storage.</span>
+                    {/* Footer Controls matching reference UI */}
+                    <div className="pt-3 border-t border-[#27272a] flex items-center justify-between">
+                      <div className="flex items-center gap-4 text-xs">
+                        <label className="flex items-center gap-2 text-zinc-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={config.rememberSettings}
+                            onChange={(e) => setConfig((prev) => ({ ...prev, rememberSettings: e.target.checked }))}
+                            className="accent-blue-500 cursor-pointer"
+                          />
+                          <span>
+                            Remember settings for <span className="bg-[#27272a] text-zinc-200 font-mono px-1.5 py-0.5 rounded text-[11px]">{config.apiIdentifier || activeModel?.id || "max"}</span>
+                          </span>
+                        </label>
+
+                        <div className="flex items-center gap-2 text-zinc-300">
+                          <button
+                            type="button"
+                            onClick={() => setConfig((prev) => ({ ...prev, showAdvanced: !prev.showAdvanced }))}
+                            className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-all cursor-pointer ${
+                              config.showAdvanced ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                            }`}
+                          >
+                            <div className="w-3.5 h-3.5 rounded-full bg-white shadow-md" />
+                          </button>
+                          <span>Show advanced settings</span>
+                        </div>
                       </div>
-                    )}
-                    {engineMode === "exo" && (
-                      <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 text-[11px] text-blue-300 flex items-center gap-2">
-                        <Network className="w-3.5 h-3.5 shrink-0" />
-                        <span>Exo distributes layers across P2P mesh nodes automatically based on available VRAM per device.</span>
+
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowWizard(false)}
+                          className="px-4 py-1.5 rounded-lg bg-[#27272a] hover:bg-[#323238] text-xs font-semibold text-zinc-300 hover:text-white transition-all cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleLaunchModel}
+                          disabled={!activeModel || isLaunching}
+                          className="px-5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all cursor-pointer shadow-md flex items-center gap-2 disabled:opacity-50"
+                        >
+                          {isLaunching ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span>Loading Model...</span>
+                            </>
+                          ) : (
+                            <span>Load Model <span className="text-[10px] opacity-75 font-normal">Ctrl + Enter</span></span>
+                          )}
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </div>
                 )}
 
@@ -1031,6 +1599,26 @@ export function RunnerPage() {
                       <div className="flex justify-between">
                         <span className="text-zinc-400 font-sans">Engine:</span>
                         <span className="font-bold text-emerald-400 uppercase">{engineMode}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400 font-sans">Context Window:</span>
+                        <span className="font-bold text-emerald-300">{config.contextLength.toLocaleString()} Tokens</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400 font-sans">Flash Attention:</span>
+                        <span className="font-bold text-emerald-300">{config.flashAttention ? "Auto Enabled" : "Disabled"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400 font-sans">GPU Offload Layers:</span>
+                        <span className="font-bold text-emerald-300">{config.gpuOffloadLayers} Layers</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400 font-sans">KV Cache Quantization:</span>
+                        <span className="font-bold text-purple-300">K: {config.kCacheQuantType} | V: {config.vCacheQuantType}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-400 font-sans">CPU Threads:</span>
+                        <span className="font-bold text-zinc-200">{config.cpuThreads} Threads</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-zinc-400 font-sans">Port:</span>

@@ -26,6 +26,11 @@ import platform
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+try:
+    from gguf_parser import parse_gguf_metadata
+except ImportError:
+    parse_gguf_metadata = None
+
 from typing import Optional, List
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,35 +148,103 @@ def compute_storage_metrics():
                         pass
 
                 size_bytes = sum(f.stat().st_size for f in path.glob("**/*") if f.is_file())
+                
+                context_window = 131072
+                parameter_size = "7B-70B"
 
                 # If size is small (e.g. registered marker), estimate from curated DB
-                if size_bytes < 10 * 1024 * 1024 and model_id.lower() in curated_map:
+                if model_id.lower() in curated_map:
                     curated_item = curated_map[model_id.lower()]
-                    size_gb_str = curated_item.get("real_size_gb", "5.4 GB")
+                    
+                    if size_bytes < 10 * 1024 * 1024:
+                        size_gb_str = curated_item.get("real_size_gb", "5.4 GB")
+                        try:
+                            gb_num = float(size_gb_str.split()[0])
+                            size_bytes = int(gb_num * 1024**3)
+                        except Exception:
+                            size_bytes = int(5.4 * 1024**3)
+                            
+                    context_window_str = curated_item.get("context_window", "131072 Tokens")
+                    parameter_size = curated_item.get("parameter_size", parameter_size)
                     try:
-                        gb_num = float(size_gb_str.split()[0])
-                        size_bytes = int(gb_num * 1024**3)
+                        if "M" in context_window_str:
+                            context_window = int(float(context_window_str.split("M")[0]) * 1000000)
+                        elif "K" in context_window_str:
+                            context_window = int(float(context_window_str.split("K")[0]) * 1000)
                     except Exception:
-                        size_bytes = int(5.4 * 1024**3)
-
-                used_bytes += size_bytes
+                        pass
+                
+                size_gb = round(size_bytes / (1024**3), 1)
+                has_mtp = any("mtp" in f.name.lower() or "draft" in f.name.lower() or "speculative" in f.name.lower() for f in path.glob("*.gguf"))
+                
+                gpu_layers_max = 99
+                if parse_gguf_metadata:
+                    # Find largest gguf file
+                    gguf_files = list(path.glob("*.gguf"))
+                    if gguf_files:
+                        largest_gguf = max(gguf_files, key=lambda f: f.stat().st_size)
+                        meta = parse_gguf_metadata(largest_gguf)
+                        # Extract context window
+                        ctx_keys = [k for k in meta.keys() if "context_length" in k]
+                        if ctx_keys:
+                            context_window = meta[ctx_keys[0]]
+                        # Extract layer count
+                        blk_keys = [k for k in meta.keys() if "block_count" in k]
+                        if blk_keys:
+                            gpu_layers_max = meta[blk_keys[0]]
+                            
                 downloaded.append({
                     "id": model_id,
                     "name": model_id.split("/")[-1] if "/" in model_id else model_id,
                     "path": str(path),
                     "size_bytes": size_bytes,
-                    "size_gb": round(size_bytes / (1024**3), 1),
+                    "size_gb": size_gb,
+                    "ram_needed_gb": round(size_gb + 2.5, 1),
+                    "vram_needed_gb": round(size_gb + 1.5, 1),
+                    "context_window": context_window,
+                    "parameter_size": parameter_size,
+                    "has_mtp": has_mtp,
+                    "gpu_layers_max": gpu_layers_max,
                 })
             elif path.suffix in [".gguf", ".safetensors", ".bin"]:
                 model_id = path.name
                 size_bytes = path.stat().st_size
                 used_bytes += size_bytes
+                
+                size_gb = round(size_bytes / (1024**3), 1)
+                context_window = 131072
+                parameter_size = "7B-70B"
+                
+                if model_id.lower() in curated_map:
+                    curated_item = curated_map[model_id.lower()]
+                    parameter_size = curated_item.get("parameter_size", parameter_size)
+                    context_window_str = curated_item.get("context_window", "131072 Tokens")
+                    try:
+                        if "M" in context_window_str:
+                            context_window = int(float(context_window_str.split("M")[0]) * 1000000)
+                        elif "K" in context_window_str:
+                            context_window = int(float(context_window_str.split("K")[0]) * 1000)
+                    except Exception:
+                        pass
+                else:
+                    # Very rough heuristic if not in curated map
+                    if size_gb > 30: parameter_size = "70B+"
+                    elif size_gb > 15: parameter_size = "32B"
+                    elif size_gb > 8: parameter_size = "14B"
+                    else: parameter_size = "7B-9B"
+                
+                has_mtp = any("mtp" in f.name.lower() or "draft" in f.name.lower() or "speculative" in f.name.lower() for f in path.parent.glob("*.gguf") if f != path)
                 downloaded.append({
                     "id": model_id,
                     "name": path.name,
                     "path": str(path),
                     "size_bytes": size_bytes,
-                    "size_gb": round(size_bytes / (1024**3), 1),
+                    "size_gb": size_gb,
+                    "ram_needed_gb": round(size_gb + 2.5, 1),
+                    "vram_needed_gb": round(size_gb + 1.5, 1),
+                    "context_window": context_window,
+                    "parameter_size": parameter_size,
+                    "has_mtp": has_mtp,
                 })
 
     drive_info = get_real_drive_usage(abs_dir)
@@ -306,6 +379,37 @@ async def list_downloaded_models():
     return {"models": metrics["models"], "count": metrics["model_count"], "directory": metrics["models_dir"]}
 
 
+@app.get("/api/model/check-mtp")
+async def check_model_mtp(model_id: str):
+    """Check if a downloaded model has an accompanying MTP / Speculative Decoding draft file."""
+    curr_dir = get_current_models_dir()
+    gguf = llama_engine_instance.find_gguf_file(model_id, curr_dir)
+    mtp = llama_engine_instance.find_mtp_draft_file(gguf) if gguf else None
+
+    if not mtp and curr_dir.exists():
+        safe_name = model_id.replace("/", "--")
+        model_sub = curr_dir / safe_name
+        if model_sub.exists() and model_sub.is_dir():
+            for f in model_sub.glob("*.gguf"):
+                fn = f.name.lower()
+                if "mtp" in fn or "draft" in fn or "speculative" in fn:
+                    mtp = f
+                    break
+        if not mtp:
+            for f in curr_dir.glob("**/*.gguf"):
+                fn = f.name.lower()
+                if "mtp" in fn or "draft" in fn or "speculative" in fn:
+                    mtp = f
+                    break
+
+    return {
+        "model_id": model_id,
+        "has_mtp": mtp is not None,
+        "mtp_file": mtp.name if mtp else None,
+        "mtp_path": str(mtp.resolve()) if mtp else None
+    }
+
+
 @app.get("/api/models/search")
 async def search_huggingface_models(q: str = Query("", description="Search term for models")):
     """Return only supported curated models, filtered locally by search query if provided."""
@@ -396,7 +500,16 @@ async def chat_completions(req: ChatCompletionRequest):
 
     if engine == "standard":
         curr_dir = get_current_models_dir()
-        gen_res = llama_engine_instance.generate(prompt=req.prompt, model_name=model_name, models_dir=curr_dir, image=req.image)
+        gen_res = llama_engine_instance.generate(
+            prompt=req.prompt, 
+            model_name=model_name, 
+            models_dir=curr_dir, 
+            temperature=req.temperature or 0.7,
+            top_k=req.top_k,
+            top_p=req.top_p,
+            repeat_penalty=req.repeat_penalty,
+            image=req.image
+        )
         response = gen_res["content"]
         thinking = gen_res.get("thinking")
         speed = gen_res["tokens_per_sec"]

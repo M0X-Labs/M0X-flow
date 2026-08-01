@@ -56,7 +56,7 @@ CURATED_DEFAULT_MODELS = [
         "weight_format": "Safetensors",
         "bit_precision": "16-bit (FP16)",
         "license": "Apache 2.0",
-        "context_window": "128K Tokens",
+        "context_window": "1M Tokens",
         "tags": ["poolside", "laguna", "140b", "moe", "text-generation"],
     },
     {
@@ -71,7 +71,7 @@ CURATED_DEFAULT_MODELS = [
         "bit_precision": "4-bit (UD-Q4_K_M)",
         "available_quantizations": ["UD-IQ2_XXS", "UD-IQ3_S", "UD-IQ4_XS", "UD-Q4_K_M", "UD-Q5_K_M", "UD-Q8_0"],
         "license": "Apache 2.0",
-        "context_window": "128K Tokens",
+        "context_window": "1M Tokens",
         "tags": ["poolside", "laguna", "140b", "unsloth", "gguf", "text-generation"],
     },
     {
