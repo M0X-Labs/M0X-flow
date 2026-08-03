@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Minus, Square, X, BrainCircuit } from "lucide-react";
+import { Minus, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /**
@@ -67,8 +67,8 @@ export function TitleBar() {
     <header className="flex items-center justify-between h-10 px-3.5 bg-[#0c0c0e] border-b border-[#27272a] select-none z-50 shrink-0">
       {/* App Branding - Draggable Region */}
       <div className="flex items-center gap-2.5 h-full cursor-default" data-tauri-drag-region>
-        <div className="w-5.5 h-5.5 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5] pointer-events-none">
-          <BrainCircuit className="w-3.5 h-3.5" />
+        <div className="w-5.5 h-5.5 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center overflow-hidden pointer-events-none">
+          <img src="/logo.png" alt="m0x-flow logo" className="w-full h-full object-contain" draggable={false} />
         </div>
 
         <div className="flex items-baseline gap-2 pointer-events-none">

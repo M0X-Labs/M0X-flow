@@ -20,7 +20,6 @@ import {
   Copy,
   Server,
   Settings,
-  FileCode,
   Info,
   Trash2,
   MoreHorizontal,
@@ -125,18 +124,18 @@ export function RunnerPage() {
   const [lanIp, setLanIp] = useState<string>("192.168.1.105");
   const [isCloudflareOn, setIsCloudflareOn] = useState<boolean>(Boolean(hostedModel?.cloudflareActive || cloudflareActive));
 
-  // Server Settings Popover & Mcp Modal States
+  // Server Settings Popover States
   const [showServerSettings, setShowServerSettings] = useState(false);
-  const [showMcpModal, setShowMcpModal] = useState(false);
   const [isServerRunning, setIsServerRunning] = useState(true);
   const [showEndpoints, setShowEndpoints] = useState(false);
   
   // Toggles inside Server Settings Popover
   const [requireAuth, setRequireAuth] = useState(false);
+  const [apiKey, setApiKey] = useState("m0x-secret");
   const [serveLan, setServeLan] = useState(false);
   const [enableAnthropicApi, setEnableAnthropicApi] = useState(true);
-  const [allowPerRequestMcps, setAllowPerRequestMcps] = useState(true);
-  const [allowCallingMcpJson, setAllowCallingMcpJson] = useState(false);
+  const [allowPerRequestMcps] = useState(true);
+  const [allowCallingMcpJson] = useState(false);
   const [enableCors, setEnableCors] = useState(true);
   const [jitModelLoading, setJitModelLoading] = useState(true);
   const [autoUnloadJit, setAutoUnloadJit] = useState(true);
@@ -177,6 +176,7 @@ export function RunnerPage() {
         baseSizeGb: m.size_gb || 4.8,
         ramNeededGb: m.ram_needed_gb || (m.size_gb ? m.size_gb + 2.5 : 7.3),
         vramNeededGb: m.vram_needed_gb || (m.size_gb ? m.size_gb + 1.5 : 6.3),
+        gpuLayersMax: m.gpu_layers_max || 99,
       }));
     }
     return [];
@@ -191,6 +191,75 @@ export function RunnerPage() {
 
   const activeModel = realModels.find((m) => m.id === selectedModelId) || realModels[0];
   const isCurrentlyLoaded = Boolean(hostedModel && hostedModel.id);
+
+  const calculateMemory = (model: any, cfg: ModelLoadConfig) => {
+    if (!model) return { gpuMem: 0, totalMem: 0, kvMem: 0, weightsMem: 0 };
+    const maxLayers = model.gpuLayersMax || 99;
+    const offloadRatio = Math.min(1, Math.max(0, cfg.gpuOffloadLayers / maxLayers));
+    
+    const baseSize = model.baseSizeGb || 4.8;
+    
+    // Base KV Cache calculation
+    let baseKvMem = (cfg.contextLength / 1024) * 0.03;
+    if (cfg.flashAttention) baseKvMem *= 0.95; // FA has minor memory overhead reduction
+    
+    let kMem = baseKvMem / 2;
+    let vMem = baseKvMem / 2;
+    
+    if (cfg.enableKQuant) {
+      if (cfg.kCacheQuantType === "Q4_0") kMem *= 0.25; // 16-bit to 4-bit
+      else if (cfg.kCacheQuantType === "Q8_0") kMem *= 0.5; // 16-bit to 8-bit
+    }
+    
+    if (cfg.enableVQuant) {
+      if (cfg.vCacheQuantType === "Q4_0") vMem *= 0.25;
+      else if (cfg.vCacheQuantType === "Q8_0") vMem *= 0.5;
+    }
+    
+    let kvCacheGb = kMem + vMem;
+    if (cfg.unifiedKvCache) kvCacheGb *= 0.95;
+    
+    const gpuMem = (baseSize * offloadRatio) + (offloadRatio > 0 && cfg.offloadKvCacheGpu ? kvCacheGb : 0);
+    const cpuMem = (baseSize * (1 - offloadRatio)) + ((offloadRatio === 0 || !cfg.offloadKvCacheGpu) ? kvCacheGb : 0) + 1.5;
+    
+    return { gpuMem, totalMem: gpuMem + cpuMem, kvMem: kvCacheGb, weightsMem: baseSize };
+  };
+
+  const { estimatedGpuGb, estimatedTotalGb, currentKvMem } = useMemo(() => {
+    const mem = calculateMemory(activeModel, config);
+    return {
+      estimatedGpuGb: mem.gpuMem.toFixed(2),
+      estimatedTotalGb: mem.totalMem.toFixed(2),
+      currentKvMem: mem.kvMem.toFixed(2),
+    };
+  }, [activeModel, config]);
+
+  const renderMemoryImpact = (key: keyof ModelLoadConfig, onValue: any, offValue: any) => {
+    if (!activeModel) return null;
+    const memOn = calculateMemory(activeModel, { ...config, [key]: onValue });
+    const memOff = calculateMemory(activeModel, { ...config, [key]: offValue });
+    
+    const vramDelta = memOn.gpuMem - memOff.gpuMem;
+    const ramDelta = memOn.totalMem - memOff.totalMem - vramDelta;
+
+    if (Math.abs(vramDelta) < 0.01 && Math.abs(ramDelta) < 0.01) return null;
+
+    const formatDelta = (val: number) => (val > 0 ? `+${val.toFixed(2)}` : val.toFixed(2));
+    const vramColor = vramDelta > 0 ? "text-amber-500" : "text-emerald-400";
+    const ramColor = ramDelta > 0 ? "text-amber-500" : "text-emerald-400";
+
+    return (
+      <div className="flex gap-2 text-[10px] font-mono mt-1 bg-black/20 px-2 py-0.5 rounded w-fit border border-white/5">
+        <span className="text-zinc-500">Impact if Enabled:</span>
+        {Math.abs(vramDelta) >= 0.01 && (
+          <span className={vramColor}>VRAM {formatDelta(vramDelta)} GB</span>
+        )}
+        {Math.abs(ramDelta) >= 0.01 && (
+           <span className={ramColor}>RAM {formatDelta(ramDelta)} GB</span>
+        )}
+      </div>
+    );
+  };
 
   // Check if selected model has an MTP file/folder on backend
   useEffect(() => {
@@ -230,8 +299,28 @@ export function RunnerPage() {
     setTimeout(() => setCopiedLabel(null), 2000);
   };
 
-  const handleNumberChange = (key: keyof ModelLoadConfig, value: number) => {
-    setConfig((prev) => ({ ...prev, [key]: value }));
+  const handleNumberChange = (key: keyof ModelLoadConfig, value: number, min?: number, max?: number) => {
+    let val = value;
+    if (min !== undefined && val < min) val = min;
+    if (max !== undefined && val > max) val = max;
+    setConfig((prev) => ({ ...prev, [key]: val }));
+  };
+
+  const handleConfigToggle = (key: keyof ModelLoadConfig, value: boolean) => {
+    setConfig((prev) => {
+      const next = { ...prev, [key]: value };
+      
+      if (key === 'flashAttention' && !value) {
+        next.enableKQuant = false;
+        next.enableVQuant = false;
+      }
+      
+      if ((key === 'enableKQuant' || key === 'enableVQuant') && value) {
+        next.flashAttention = true;
+      }
+      
+      return next;
+    });
   };
 
   const handlePortChange = (newPort: number) => {
@@ -277,6 +366,7 @@ export function RunnerPage() {
     
     const serverSettings = {
       requireAuth,
+      apiKey,
       serveLan,
       enableAnthropicApi,
       allowPerRequestMcps,
@@ -417,6 +507,27 @@ export function RunnerPage() {
                       </button>
                     </div>
 
+                    {/* API Key Input (conditional) */}
+                    <AnimatePresence>
+                      {requireAuth && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="flex items-center justify-between py-1 overflow-hidden"
+                        >
+                          <span className="font-medium text-zinc-400">API Key</span>
+                          <input
+                            type="text"
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            placeholder="m0x-secret"
+                            className="w-36 bg-[#101014] border border-[#3f3f46] text-emerald-400 font-bold text-xs px-2 py-1 rounded-lg outline-none focus:border-emerald-500 transition-all"
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
                     {/* Serve on Local Network */}
                     <div className="flex items-center justify-between py-1">
                       <div className="flex items-center gap-1.5">
@@ -468,39 +579,7 @@ export function RunnerPage() {
                       </button>
                     </div>
 
-                    {/* Allow per-request MCPs */}
-                    <div className="flex items-center justify-between py-1">
-                      <div className="flex items-center gap-1.5">
-                        <span>Allow per-request MCPs</span>
-                        <Info className="w-3.5 h-3.5 text-zinc-500" />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setAllowPerRequestMcps(!allowPerRequestMcps)}
-                        className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer ${
-                          allowPerRequestMcps ? "bg-emerald-500" : "bg-[#3f3f46]"
-                        }`}
-                      >
-                        <div className={`w-4 h-4 rounded-full bg-white transition-transform ${allowPerRequestMcps ? "translate-x-4" : "translate-x-0"}`} />
-                      </button>
-                    </div>
 
-                    {/* Allow calling servers from mcp.json */}
-                    <div className="flex items-center justify-between py-1">
-                      <div className="flex items-center gap-1.5">
-                        <span>Allow calling servers from mcp.json</span>
-                        <Info className="w-3.5 h-3.5 text-zinc-500" />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setAllowCallingMcpJson(!allowCallingMcpJson)}
-                        className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer ${
-                          allowCallingMcpJson ? "bg-emerald-500" : "bg-[#3f3f46]"
-                        }`}
-                      >
-                        <div className={`w-4 h-4 rounded-full bg-white transition-transform ${allowCallingMcpJson ? "translate-x-4" : "translate-x-0"}`} />
-                      </button>
-                    </div>
 
                     {/* Enable CORS */}
                     <div className="flex items-center justify-between py-1">
@@ -593,15 +672,7 @@ export function RunnerPage() {
             </AnimatePresence>
           </div>
 
-          {/* mcp.json Button */}
-          <button
-            type="button"
-            onClick={() => setShowMcpModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a] text-xs font-medium text-[#a1a1aa] hover:text-white hover:border-[#3f3f46] hover:bg-[#202025] transition-all duration-200 cursor-pointer active:scale-95"
-          >
-            <FileCode className="w-3.5 h-3.5 text-blue-400" />
-            <span>mcp.json</span>
-          </button>
+
         </div>
 
         {/* Right Side: Reachable at & Load Model Action */}
@@ -784,62 +855,7 @@ export function RunnerPage() {
         </div>
       </div>
 
-      {/* ================= MCP JSON MODAL ================= */}
-      <AnimatePresence>
-        {showMcpModal && (
-          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#16161a] border border-[#2d2d34] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl"
-            >
-              <div className="px-5 py-3.5 border-b border-[#27272a] flex items-center justify-between bg-[#1b1b20]">
-                <div className="flex items-center gap-2.5">
-                  <FileCode className="w-4 h-4 text-blue-400" />
-                  <span className="text-sm font-bold text-white tracking-tight">mcp.json Configuration</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowMcpModal(false)}
-                  className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-[#27272a] cursor-pointer transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
 
-              <div className="p-5 space-y-3 font-mono text-xs bg-[#101014]">
-                <pre className="text-emerald-400 bg-[#09090c] p-4 rounded-xl border border-[#27272a] overflow-x-auto shadow-inner">
-{`{
-  "mcpServers": {
-    "m0x-local": {
-      "command": "npx",
-      "args": ["-y", "@m0x-flow/mcp-server"],
-      "env": {
-        "PORT": "${hostingPort}"
-      }
-    }
-  }
-}`}
-                </pre>
-                <p className="text-zinc-400 font-sans text-xs">
-                  Copy this configuration into your Claude Desktop app or local MCP client to grant access to local m0x-flow tools.
-                </p>
-              </div>
-
-              <div className="px-5 py-3.5 border-t border-[#27272a] bg-[#16161a] flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleCopyText(`{\n  "mcpServers": {\n    "m0x-local": {\n      "command": "npx",\n      "args": ["-y", "@m0x-flow/mcp-server"]\n    }\n  }\n}`, "mcp_json")}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold cursor-pointer shadow-md transition-all active:scale-95"
-                >
-                  {copiedLabel === "mcp_json" ? "Copied!" : "Copy Configuration"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* ================= MODEL LAUNCHER WIZARD MODAL ================= */}
       <AnimatePresence>
@@ -1060,10 +1076,13 @@ export function RunnerPage() {
                           Estimated Memory Usage <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Beta</span>
                         </span>
                         <span className="bg-[#27272a] text-zinc-200 text-[11px] font-mono px-2 py-1 rounded-md border border-zinc-700">
-                          GPU <strong className="text-white">8.07 GB</strong>
+                          GPU <strong className="text-white">{estimatedGpuGb} GB</strong>
                         </span>
                         <span className="bg-[#27272a] text-zinc-200 text-[11px] font-mono px-2 py-1 rounded-md border border-zinc-700">
-                          Total <strong className="text-white">8.07 GB</strong>
+                          KV Cache <strong className="text-purple-300">{currentKvMem} GB</strong>
+                        </span>
+                        <span className="bg-[#27272a] text-zinc-200 text-[11px] font-mono px-2 py-1 rounded-md border border-zinc-700">
+                          Total <strong className="text-white">{estimatedTotalGb} GB</strong>
                         </span>
                       </div>
                     </div>
@@ -1110,7 +1129,7 @@ export function RunnerPage() {
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => handleNumberChange("contextLength", 131072)}
+                              onClick={() => handleNumberChange("contextLength", activeModel?.maxContext || 131072, 512, activeModel?.maxContext || 131072)}
                               className="text-zinc-400 hover:text-white transition-all cursor-pointer"
                               title="Reset to default"
                             >
@@ -1119,56 +1138,58 @@ export function RunnerPage() {
                             <input
                               type="number"
                               value={config.contextLength}
-                              onChange={(e) => handleNumberChange("contextLength", Number(e.target.value))}
+                              onChange={(e) => handleNumberChange("contextLength", Number(e.target.value), 512, activeModel?.maxContext || 131072)}
                               className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
                             />
                           </div>
                         </div>
                         <div className="text-[11px] text-zinc-400 flex items-center gap-1">
-                          Model supports up to <span className="bg-[#27272a] text-zinc-200 font-mono px-1.5 py-0.5 rounded text-[10px]">131072</span> tokens
+                          Model supports up to <span className="bg-[#27272a] text-zinc-200 font-mono px-1.5 py-0.5 rounded text-[10px]">{activeModel?.maxContext || 131072}</span> tokens
                         </div>
                         <input
                           type="range"
                           min={512}
-                          max={131072}
+                          max={activeModel?.maxContext || 131072}
                           step={512}
                           value={config.contextLength}
-                          onChange={(e) => handleNumberChange("contextLength", Number(e.target.value))}
+                          onChange={(e) => handleNumberChange("contextLength", Number(e.target.value), 512, activeModel?.maxContext || 131072)}
                           className="w-full accent-blue-500 cursor-pointer"
                         />
                       </div>
 
                       {/* 4. GPU Offload */}
-                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-zinc-200">GPU Offload</span>
-                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                      {engineMode !== "airllm" && (
+                        <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-200">GPU Offload</span>
+                              <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                            </div>
+                            <input
+                              type="number"
+                              value={config.gpuOffloadLayers}
+                              onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value), 0, activeModel?.gpuLayersMax || 99)}
+                              className="w-20 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                            />
                           </div>
                           <input
-                            type="number"
+                            type="range"
+                            min={0}
+                            max={activeModel?.gpuLayersMax || 99}
                             value={config.gpuOffloadLayers}
-                            onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value))}
-                            className="w-20 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
+                            onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value), 0, activeModel?.gpuLayersMax || 99)}
+                            className="w-full accent-blue-500 cursor-pointer"
                           />
+                          <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
+                            <span className="flex items-center gap-1">
+                              💡 Model offload limited to dedicated GPU memory. Actual number of offloaded layers may differ
+                            </span>
+                            <button type="button" className="text-zinc-300 hover:text-white flex items-center gap-1 border border-zinc-700 px-2 py-0.5 rounded bg-zinc-800/60 cursor-pointer">
+                              GPU Settings <ExternalLink className="w-3 h-3" />
+                            </button>
+                          </div>
                         </div>
-                        <input
-                          type="range"
-                          min={0}
-                          max={99}
-                          value={config.gpuOffloadLayers}
-                          onChange={(e) => handleNumberChange("gpuOffloadLayers", Number(e.target.value))}
-                          className="w-full accent-blue-500 cursor-pointer"
-                        />
-                        <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
-                          <span className="flex items-center gap-1">
-                            💡 Model offload limited to dedicated GPU memory. Actual number of offloaded layers may differ
-                          </span>
-                          <button type="button" className="text-zinc-300 hover:text-white flex items-center gap-1 border border-zinc-700 px-2 py-0.5 rounded bg-zinc-800/60 cursor-pointer">
-                            GPU Settings <ExternalLink className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
+                      )}
 
                       {/* 5. CPU Thread Pool Size */}
                       <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
@@ -1181,7 +1202,7 @@ export function RunnerPage() {
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => handleNumberChange("cpuThreads", 1)}
+                              onClick={() => handleNumberChange("cpuThreads", 1, 1, 64)}
                               className="text-zinc-400 hover:text-white transition-all cursor-pointer"
                               title="Reset to default"
                             >
@@ -1190,7 +1211,7 @@ export function RunnerPage() {
                             <input
                               type="number"
                               value={config.cpuThreads}
-                              onChange={(e) => handleNumberChange("cpuThreads", Number(e.target.value))}
+                              onChange={(e) => handleNumberChange("cpuThreads", Number(e.target.value), 1, 64)}
                               className="w-20 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
                             />
                           </div>
@@ -1200,7 +1221,7 @@ export function RunnerPage() {
                           min={1}
                           max={32}
                           value={config.cpuThreads}
-                          onChange={(e) => handleNumberChange("cpuThreads", Number(e.target.value))}
+                          onChange={(e) => handleNumberChange("cpuThreads", Number(e.target.value), 1, 64)}
                           className="w-full accent-blue-500 cursor-pointer"
                         />
                       </div>
@@ -1214,7 +1235,7 @@ export function RunnerPage() {
                         <input
                           type="number"
                           value={config.evalBatchSize}
-                          onChange={(e) => handleNumberChange("evalBatchSize", Number(e.target.value))}
+                          onChange={(e) => handleNumberChange("evalBatchSize", Number(e.target.value), 1, 8192)}
                           className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
                         />
                       </div>
@@ -1228,7 +1249,7 @@ export function RunnerPage() {
                         <input
                           type="number"
                           value={config.physicalBatchSize}
-                          onChange={(e) => handleNumberChange("physicalBatchSize", Number(e.target.value))}
+                          onChange={(e) => handleNumberChange("physicalBatchSize", Number(e.target.value), 1, 8192)}
                           className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
                         />
                       </div>
@@ -1243,28 +1264,33 @@ export function RunnerPage() {
                         <input
                           type="number"
                           value={config.maxConcurrentPredictions}
-                          onChange={(e) => handleNumberChange("maxConcurrentPredictions", Number(e.target.value))}
+                          onChange={(e) => handleNumberChange("maxConcurrentPredictions", Number(e.target.value), 1, 10)}
                           className="w-24 bg-[#101014] border border-[#27272a] rounded-lg px-2 py-1 text-xs text-white text-right font-mono"
                         />
                       </div>
 
                       {/* 9. Unified KV Cache */}
-                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-zinc-200">Unified KV Cache</span>
-                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
-                          <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                      {engineMode === "standard" && (
+                        <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-200">Unified KV Cache</span>
+                              <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                              <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                            </div>
+                            {renderMemoryImpact("unifiedKvCache", true, false)}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setConfig((prev) => ({ ...prev, unifiedKvCache: !prev.unifiedKvCache }))}
+                            className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                              config.unifiedKvCache ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                            }`}
+                          >
+                            <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setConfig((prev) => ({ ...prev, unifiedKvCache: !prev.unifiedKvCache }))}
-                          className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
-                            config.unifiedKvCache ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
-                          }`}
-                        >
-                          <div className="w-4 h-4 rounded-full bg-white shadow-md" />
-                        </button>
-                      </div>
+                      )}
 
                       {/* 10. RoPE Frequency Base */}
                       <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
@@ -1301,21 +1327,26 @@ export function RunnerPage() {
                       </div>
 
                       {/* 12. Offload KV Cache to GPU Memory */}
-                      <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-zinc-200">Offload KV Cache to GPU Memory</span>
-                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                      {engineMode !== "airllm" && (
+                        <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-200">Offload KV Cache to GPU Memory</span>
+                              <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                            </div>
+                            {renderMemoryImpact("offloadKvCacheGpu", true, false)}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setConfig((prev) => ({ ...prev, offloadKvCacheGpu: !prev.offloadKvCacheGpu }))}
+                            className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                              config.offloadKvCacheGpu ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                            }`}
+                          >
+                            <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setConfig((prev) => ({ ...prev, offloadKvCacheGpu: !prev.offloadKvCacheGpu }))}
-                          className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
-                            config.offloadKvCacheGpu ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
-                          }`}
-                        >
-                          <div className="w-4 h-4 rounded-full bg-white shadow-md" />
-                        </button>
-                      </div>
+                      )}
 
                       {/* 13. Keep Model in Memory */}
                       <div className="p-3 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
@@ -1369,112 +1400,130 @@ export function RunnerPage() {
                       </div>
 
                       {/* 16. Flash Attention */}
-                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-zinc-200">Flash Attention</span>
-                          <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
-                          <div className="w-2 h-2 rounded-full bg-blue-500" />
+                      {engineMode !== "airllm" && engineMode !== "exo" && (
+                        <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-200">Flash Attention</span>
+                              <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                              <div className="w-2 h-2 rounded-full bg-blue-500" />
+                            </div>
+                            {renderMemoryImpact("flashAttention", true, false)}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleConfigToggle("flashAttention", true)}
+                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                              title="Reset to default"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleConfigToggle("flashAttention", !config.flashAttention)}
+                              className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
+                                config.flashAttention ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
+                              }`}
+                            >
+                              <div className="w-4 h-4 rounded-full bg-white shadow-md" />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => setConfig((prev) => ({ ...prev, flashAttention: true }))}
-                            className="text-zinc-400 hover:text-white transition-all cursor-pointer"
-                            title="Reset to default"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfig((prev) => ({ ...prev, flashAttention: !prev.flashAttention }))}
-                            className={`w-11 h-6 flex items-center rounded-full p-1 transition-all cursor-pointer ${
-                              config.flashAttention ? "bg-blue-600 justify-end" : "bg-zinc-700 justify-start"
-                            }`}
-                          >
-                            <div className="w-4 h-4 rounded-full bg-white shadow-md" />
-                          </button>
-                        </div>
-                      </div>
+                      )}
 
                       {/* 17. K Cache Quantization Type */}
-                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-zinc-200">K Cache Quantization Type</span>
-                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
-                            <input
-                              type="checkbox"
-                              checked={config.enableKQuant}
-                              onChange={(e) => setConfig((prev) => ({ ...prev, enableKQuant: e.target.checked }))}
-                              className="accent-blue-500 cursor-pointer"
-                            />
-                            <div className="w-2 h-2 rounded-full bg-blue-500" />
-                            <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                      {engineMode !== "airllm" && engineMode !== "exo" && (
+                        <div className={`p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2 transition-opacity ${!config.flashAttention ? 'opacity-50 pointer-events-none' : ''}`}>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-zinc-200">K Cache Quantization Type</span>
+                                <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                                <input
+                                  type="checkbox"
+                                  checked={config.enableKQuant}
+                                  onChange={(e) => handleConfigToggle("enableKQuant", e.target.checked)}
+                                  className="accent-blue-500 cursor-pointer"
+                                />
+                                <div className="w-2 h-2 rounded-full bg-blue-500" />
+                                <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                              </div>
+                              {renderMemoryImpact("enableKQuant", true, false)}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setConfig((prev) => ({ ...prev, kCacheQuantType: "Q4_0" }))}
+                                className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                                title="Reset to default"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                              <select
+                                value={config.kCacheQuantType}
+                                onChange={(e) => setConfig((prev) => ({ ...prev, kCacheQuantType: e.target.value as any }))}
+                                className="bg-[#101014] border border-[#27272a] rounded-lg px-3 py-1 text-xs text-white font-mono cursor-pointer"
+                              >
+                                <option value="Q4_0">Q4_0</option>
+                                <option value="Q8_0">Q8_0</option>
+                                <option value="F16">F16</option>
+                              </select>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setConfig((prev) => ({ ...prev, kCacheQuantType: "Q4_0" }))}
-                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
-                              title="Reset to default"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                            </button>
-                            <select
-                              value={config.kCacheQuantType}
-                              onChange={(e) => setConfig((prev) => ({ ...prev, kCacheQuantType: e.target.value as any }))}
-                              className="bg-[#101014] border border-[#27272a] rounded-lg px-3 py-1 text-xs text-white font-mono cursor-pointer"
-                            >
-                              <option value="Q4_0">Q4_0</option>
-                              <option value="Q8_0">Q8_0</option>
-                              <option value="F16">F16</option>
-                            </select>
-                          </div>
+                          {!config.flashAttention && (
+                            <p className="text-[10px] text-zinc-400 font-mono text-amber-500/80">Requires Flash Attention to be enabled.</p>
+                          )}
                         </div>
-                      </div>
+                      )}
 
                       {/* 18. V Cache Quantization Type */}
-                      <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-zinc-200">V Cache Quantization Type</span>
-                            <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
-                            <input
-                              type="checkbox"
-                              checked={config.enableVQuant}
-                              onChange={(e) => setConfig((prev) => ({ ...prev, enableVQuant: e.target.checked }))}
-                              className="accent-blue-500 cursor-pointer"
-                            />
-                            <div className="w-2 h-2 rounded-full bg-blue-500" />
-                            <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                      {engineMode !== "airllm" && engineMode !== "exo" && (
+                        <div className={`p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2 transition-opacity ${!config.flashAttention ? 'opacity-50 pointer-events-none' : ''}`}>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-zinc-200">V Cache Quantization Type</span>
+                                <HelpCircle className="w-3.5 h-3.5 text-zinc-400 cursor-help" />
+                                <input
+                                  type="checkbox"
+                                  checked={config.enableVQuant}
+                                  onChange={(e) => handleConfigToggle("enableVQuant", e.target.checked)}
+                                  className="accent-blue-500 cursor-pointer"
+                                />
+                                <div className="w-2 h-2 rounded-full bg-blue-500" />
+                                <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700">Experimental</span>
+                              </div>
+                              {renderMemoryImpact("enableVQuant", true, false)}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setConfig((prev) => ({ ...prev, vCacheQuantType: "Q4_0" }))}
+                                className="text-zinc-400 hover:text-white transition-all cursor-pointer"
+                                title="Reset to default"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                              <select
+                                value={config.vCacheQuantType}
+                                onChange={(e) => setConfig((prev) => ({ ...prev, vCacheQuantType: e.target.value as any }))}
+                                className="bg-[#101014] border border-[#27272a] rounded-lg px-3 py-1 text-xs text-white font-mono cursor-pointer"
+                              >
+                                <option value="Q4_0">Q4_0</option>
+                                <option value="Q8_0">Q8_0</option>
+                                <option value="F16">F16</option>
+                              </select>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setConfig((prev) => ({ ...prev, vCacheQuantType: "Q4_0" }))}
-                              className="text-zinc-400 hover:text-white transition-all cursor-pointer"
-                              title="Reset to default"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                            </button>
-                            <select
-                              value={config.vCacheQuantType}
-                              onChange={(e) => setConfig((prev) => ({ ...prev, vCacheQuantType: e.target.value as any }))}
-                              className="bg-[#101014] border border-[#27272a] rounded-lg px-3 py-1 text-xs text-white font-mono cursor-pointer"
-                            >
-                              <option value="Q4_0">Q4_0</option>
-                              <option value="Q8_0">Q8_0</option>
-                              <option value="F16">F16</option>
-                            </select>
-                          </div>
+                          <p className="text-[11px] text-zinc-400 pt-1">
+                            KV Cache Quantization is an experimental feature that may cause issues with some models. Flash Attention must be enabled for V cache quantization. If you encounter problems, reset to the default "F16".
+                          </p>
                         </div>
-                        <p className="text-[11px] text-zinc-400 pt-1">
-                          KV Cache Quantization is an experimental feature that may cause issues with some models. Flash Attention must be enabled for V cache quantization. If you encounter problems, reset to the default "F16".
-                        </p>
-                      </div>
+                      )}
 
-                      {/* 19. MTP Speculative Decoding (Draft Model Acceleration) — Shown ONLY if MTP file exists */}
-                      {hasMtpFile && (
+                      {/* 19. MTP Speculative Decoding (Draft Model Acceleration) — Shown ONLY if MTP file exists and engine is standard */}
+                      {hasMtpFile && engineMode === "standard" && (
                         <div className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-3">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -1505,7 +1554,7 @@ export function RunnerPage() {
                                   min={1}
                                   max={16}
                                   value={config.mtpMaxDraftTokens}
-                                  onChange={(e) => handleNumberChange("mtpMaxDraftTokens", Number(e.target.value))}
+                                  onChange={(e) => handleNumberChange("mtpMaxDraftTokens", Number(e.target.value), 1, 16)}
                                   className="w-full bg-[#101014] border border-[#27272a] rounded-lg px-2.5 py-1 text-xs text-white font-mono"
                                 />
                               </div>

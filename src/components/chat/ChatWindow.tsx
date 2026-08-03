@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import { Sparkles, Cpu, Network, Terminal, Zap } from "lucide-react";
+import { Cpu, Network, Terminal, Zap } from "lucide-react";
 import { MessageBubble, Message } from "./MessageBubble";
 import { motion } from "framer-motion";
 
@@ -45,9 +45,9 @@ export function ChatWindow({ messages, isGenerating = false, onSelectStarter }: 
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ duration: 0.2 }}
-            className="w-14 h-14 rounded-2xl bg-[#141418] border border-[#27272a] flex items-center justify-center mb-5"
+            className="w-14 h-14 rounded-2xl bg-[#141418] border border-[#27272a] flex items-center justify-center overflow-hidden mb-5"
           >
-            <Sparkles className="w-7 h-7 text-[#f4f4f5]" />
+            <img src="/logo.png" alt="m0x-flow logo" className="w-full h-full object-contain" draggable={false} />
           </motion.div>
 
           <h1 className="text-xl font-bold text-[#f4f4f5] tracking-tight">

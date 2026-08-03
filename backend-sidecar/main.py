@@ -234,6 +234,16 @@ def compute_storage_metrics():
                     else: parameter_size = "7B-9B"
                 
                 has_mtp = any("mtp" in f.name.lower() or "draft" in f.name.lower() or "speculative" in f.name.lower() for f in path.parent.glob("*.gguf") if f != path)
+                gpu_layers_max = 99
+                if parse_gguf_metadata and path.suffix == ".gguf":
+                    meta = parse_gguf_metadata(path)
+                    ctx_keys = [k for k in meta.keys() if "context_length" in k]
+                    if ctx_keys:
+                        context_window = meta[ctx_keys[0]]
+                    blk_keys = [k for k in meta.keys() if "block_count" in k]
+                    if blk_keys:
+                        gpu_layers_max = meta[blk_keys[0]]
+                        
                 downloaded.append({
                     "id": model_id,
                     "name": path.name,
@@ -245,6 +255,7 @@ def compute_storage_metrics():
                     "context_window": context_window,
                     "parameter_size": parameter_size,
                     "has_mtp": has_mtp,
+                    "gpu_layers_max": gpu_layers_max,
                 })
 
     drive_info = get_real_drive_usage(abs_dir)
@@ -436,6 +447,10 @@ class ChatCompletionRequest(BaseModel):
     prompt: str
     engine_mode: str = "standard"
     image: Optional[str] = None  # base64 data URL (data:image/...;base64,...)
+    temperature: Optional[float] = None  # None → engine default (0.7)
+    top_k: Optional[int] = None
+    top_p: Optional[float] = None
+    repeat_penalty: Optional[float] = None
 
 
 @app.post("/api/models/download")
@@ -490,6 +505,8 @@ async def delete_model(id: str = Query(..., description="Model ID to delete")):
 @app.post("/api/chat/completions")
 async def chat_completions(req: ChatCompletionRequest):
     """Execute live AI chat completion across Standard (llama/vLLM), AirLLM, or Exo Pods."""
+    global LAST_REQUEST_TIME
+    LAST_REQUEST_TIME = time.time()
     model_name = req.model
     engine = req.engine_mode.lower()
 
@@ -498,6 +515,7 @@ async def chat_completions(req: ChatCompletionRequest):
     HOSTED_MODEL_STATE["model_name"] = model_name
     HOSTED_MODEL_STATE["engine_mode"] = engine
 
+    thinking = None  # only the standard engine emits reasoning content
     if engine == "standard":
         curr_dir = get_current_models_dir()
         gen_res = llama_engine_instance.generate(
@@ -604,7 +622,86 @@ HOSTED_MODEL_STATE = {
     "host_ip": "127.0.0.1",
     "cloudflare_active": False,
     "cloudflare_url": None,
+    "server_settings": {},
 }
+
+SERVER_SETTINGS_STATE = {
+    "requireAuth": False,
+    "apiKey": "m0x-secret",
+    "serveLan": False,
+    "enableAnthropicApi": True,
+    "enableCors": True,
+    "jitModelLoading": True,
+    "autoUnloadJit": False,
+    "maxIdleTtl": 60,
+    "onlyKeepLastJit": True,
+}
+
+LAST_REQUEST_TIME = time.time()
+
+
+class AnthropicMessageRequest(BaseModel):
+    model: str
+    messages: List[dict]
+    max_tokens: int = 1024
+    system: Optional[str] = None
+    temperature: Optional[float] = 0.7
+
+
+@app.post("/v1/messages")
+async def anthropic_messages(req: AnthropicMessageRequest):
+    """Anthropic API (/v1/messages) compatibility layer for Claude SDKs."""
+    global LAST_REQUEST_TIME
+    LAST_REQUEST_TIME = time.time()
+    
+    if not SERVER_SETTINGS_STATE.get("enableAnthropicApi", True):
+        raise HTTPException(status_code=403, detail="Anthropic API endpoint is disabled in Server Settings.")
+    
+    prompt = ""
+    if req.system:
+        prompt += f"System: {req.system}\n\n"
+    for m in req.messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join([c.get("text", "") for c in content if isinstance(c, dict)])
+        prompt += f"{role.capitalize()}: {content}\n"
+    
+    res = await chat_completions(ChatCompletionRequest(model=req.model, prompt=prompt, engine_mode=HOSTED_MODEL_STATE.get("engine_mode", "standard")))
+    
+    return {
+        "id": f"msg_{os.urandom(8).hex()}",
+        "type": "message",
+        "role": "assistant",
+        "model": req.model,
+        "content": [{"type": "text", "text": res["content"]}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": res.get("usage", {}).get("prompt_tokens", 10),
+            "output_tokens": res.get("usage", {}).get("completion_tokens", 20)
+        }
+    }
+
+
+def start_jit_idle_checker():
+    def checker_loop():
+        while True:
+            time.sleep(15)
+            try:
+                if SERVER_SETTINGS_STATE.get("autoUnloadJit", False) and HOSTED_MODEL_STATE["is_hosted"]:
+                    ttl_mins = SERVER_SETTINGS_STATE.get("maxIdleTtl", 60)
+                    idle_sec = time.time() - LAST_REQUEST_TIME
+                    if idle_sec > (ttl_mins * 60):
+                        add_system_log("info", f"[JIT Idle TTL] Automatically unloading model after {int(idle_sec/60)} mins of inactivity.", "jit")
+                        llama_engine_instance.unload_model()
+                        airllm_engine_instance.unload()
+                        exo_engine_instance.stop_daemon()
+                        HOSTED_MODEL_STATE["is_hosted"] = False
+            except Exception:
+                pass
+    threading.Thread(target=checker_loop, daemon=True).start()
+
+start_jit_idle_checker()
 
 CLOUDFLARE_TUNNEL_STATE = {
     "active": False,
@@ -1040,6 +1137,9 @@ async def host_model(req: HostModelRequest):
             server_settings=req.server_settings,
         )
 
+    if req.server_settings:
+        SERVER_SETTINGS_STATE.update(req.server_settings)
+
     HOSTED_MODEL_STATE["is_hosted"] = True
     HOSTED_MODEL_STATE["model_id"] = req.model_id
     HOSTED_MODEL_STATE["model_name"] = req.model_name
@@ -1048,6 +1148,7 @@ async def host_model(req: HostModelRequest):
     HOSTED_MODEL_STATE["host_ip"] = req.host_ip
     HOSTED_MODEL_STATE["cloudflare_active"] = req.cloudflare_active
     HOSTED_MODEL_STATE["engine_details"] = load_res
+    HOSTED_MODEL_STATE["server_settings"] = SERVER_SETTINGS_STATE
 
     if req.cloudflare_active:
         url = await asyncio.to_thread(start_real_cloudflare_tunnel, req.port)

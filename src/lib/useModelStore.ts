@@ -16,6 +16,7 @@ export interface RealModel {
   vram_needed_gb?: number;
   context_window?: number;
   parameter_size?: string;
+  gpu_layers_max?: number;
 }
 
 export interface CustomModel {
@@ -92,6 +93,7 @@ export function useModelStore() {
               vram_needed_gb: m.vram_needed_gb,
               context_window: m.context_window,
               parameter_size: m.parameter_size,
+              gpu_layers_max: m.gpu_layers_max,
             }));
             setDownloadedModels(sidecarModels);
             saveStoredModels(sidecarModels);

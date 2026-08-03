@@ -6,7 +6,6 @@ import {
   Boxes,
   Network,
   SlidersHorizontal,
-  Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
@@ -49,8 +48,8 @@ export function Sidebar() {
               transition={{ duration: 0.15 }}
               className="flex items-center gap-2 overflow-hidden"
             >
-              <div className="w-5.5 h-5.5 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5] shrink-0">
-                <Sparkles className="w-3.5 h-3.5" />
+              <div className="w-5.5 h-5.5 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center overflow-hidden shrink-0">
+                <img src="/logo.png" alt="m0x-flow logo" className="w-full h-full object-contain" draggable={false} />
               </div>
               <span className="text-xs font-mono font-bold text-[#f4f4f5] tracking-wider uppercase truncate">
                 Navigation
@@ -160,8 +159,8 @@ export function Sidebar() {
               transition={{ duration: 0.15 }}
               className="flex items-center gap-2.5 p-2.5 rounded-xl bg-[#121215] border border-[#27272a]"
             >
-              <div className="w-7 h-7 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center text-[#f4f4f5] shrink-0">
-                <Sparkles className="w-3.5 h-3.5" />
+              <div className="w-7 h-7 rounded-lg bg-[#18181c] border border-[#27272a] flex items-center justify-center overflow-hidden shrink-0">
+                <img src="/logo.png" alt="m0x-flow logo" className="w-full h-full object-contain" draggable={false} />
               </div>
               <div className="flex flex-col overflow-hidden">
                 <span className="text-[11px] font-bold text-[#f4f4f5] truncate">AirLLM & Exo</span>
@@ -173,10 +172,10 @@ export function Sidebar() {
             </motion.div>
           ) : (
             <div
-              className="w-10 h-10 mx-auto rounded-xl bg-[#141417] border border-[#27272a] flex items-center justify-center text-[#f4f4f5] hover:border-[#3f3f46] transition-all cursor-pointer"
+              className="w-10 h-10 mx-auto rounded-xl bg-[#141417] border border-[#27272a] flex items-center justify-center overflow-hidden hover:border-[#3f3f46] transition-all cursor-pointer"
               title="AirLLM & Exo Cluster Active"
             >
-              <Sparkles className="w-4 h-4 text-[#f4f4f5]" />
+              <img src="/logo.png" alt="m0x-flow logo" className="w-full h-full object-contain" draggable={false} />
             </div>
           )}
         </AnimatePresence>

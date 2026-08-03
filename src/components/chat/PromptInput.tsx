@@ -13,6 +13,8 @@ interface PromptInputProps {
  * PromptInput — Clean Obsidian glass prompt box with model selector,
  * attachment trigger, stop controls, auto-expanding input, and click-outside dismissal.
  */
+import { useRuntimeStore } from "@/lib/useRuntimeStore";
+
 export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = false }: PromptInputProps) {
   const [prompt, setPrompt] = useState("");
   const [downloadedModels, setDownloadedModels] = useState<RealModel[]>([]);
@@ -25,6 +27,7 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
   const menuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const { hostedModel } = useRuntimeStore();
 
   // Load real models and custom models from local storage / sidecar
   useEffect(() => {
@@ -33,15 +36,15 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
     setDownloadedModels(models);
     setCustomModels(custom);
     
-    // Prefer custom models first, then downloaded models, then default model
-    if (custom.length > 0 && !selectedModelId) {
+    // Automatically select currently active running model if available
+    if (hostedModel?.id && !selectedModelId) {
+      setSelectedModelId(hostedModel.id);
+    } else if (custom.length > 0 && !selectedModelId) {
       setSelectedModelId(`custom-${custom[0].id}`);
     } else if (models.length > 0 && !selectedModelId) {
       setSelectedModelId(models[0].id);
-    } else if (!selectedModelId) {
-      setSelectedModelId("unsloth/Qwen3.6-27B-MTP-GGUF");
     }
-  }, [showModelMenu, selectedModelId]);
+  }, [showModelMenu, selectedModelId, hostedModel]);
 
   // Click outside to close model dropdown
   useEffect(() => {
@@ -103,7 +106,9 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
     ? customModels.find((m) => m.id === selectedModelId.replace("custom-", ""))
     : null;
 
-  const displayModelName = activeCustomModel 
+  const displayModelName = hostedModel?.name
+    ? hostedModel.name
+    : activeCustomModel 
     ? activeCustomModel.name 
     : activeModel?.name 
     ? activeModel.name 
@@ -120,10 +125,19 @@ export function PromptInput({ onSendMessage, onStopGeneration, isGenerating = fa
               onClick={() => setShowModelMenu(!showModelMenu)}
               className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#18181c] hover:bg-[#222226] border border-[#27272a] text-xs font-semibold text-[#f4f4f5] transition-all cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5 text-[#a1a1aa]" />
+              {hostedModel ? (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-500/50" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 text-[#a1a1aa]" />
+              )}
               <span className="font-mono text-xs truncate max-w-[220px]">
                 {displayModelName}
               </span>
+              {hostedModel && (
+                <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 font-bold uppercase">
+                  Active
+                </span>
+              )}
               <ChevronDown className={`w-3.5 h-3.5 text-[#71717a] transition-transform duration-200 ${showModelMenu ? "rotate-180" : ""}`} />
             </button>
 

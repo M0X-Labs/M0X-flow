@@ -77,6 +77,8 @@ class LlamaEngine:
         self.tokenizer_instance = None
         self.backend_type: str = "none"
         self.server_port: int = 8080
+        self._load_config: Dict[str, Any] = {}
+        self._load_server_settings: Dict[str, Any] = {}
 
     @staticmethod
     def _pick_main_gguf(ggufs: list) -> Optional[Path]:
@@ -147,6 +149,19 @@ class LlamaEngine:
 
     def load_model(self, model_identifier: str, models_dir: Path, gpu_layers: int = 99, ctx_size: int = 4096, port: int = 8080, config: Optional[dict] = None, server_settings: Optional[dict] = None) -> Dict[str, Any]:
         """Load model into NVIDIA GPU VRAM using llama-server CUDA binary or fallbacks on a configurable port."""
+        # Fast path: same model already active & healthy — skip killing the server and re-loading weights into VRAM
+        if self.backend_type == "cuda_server" and self.active_model_name == model_identifier and self.server_port == port:
+            if self._check_http_service(f"http://127.0.0.1:{self.server_port}/health"):
+                self._load_config = config or {}
+                self._load_server_settings = server_settings or {}
+                add_system_log("info", f"Model '{model_identifier}' already loaded & healthy — skipping reload.", "engine")
+                return {"status": "loaded", "backend": "cuda_server", "model": model_identifier, "skipped": True}
+        if self.backend_type == "llama_cpp" and self.active_model_name == model_identifier and self.llm_instance is not None:
+            self._load_config = config or {}
+            self._load_server_settings = server_settings or {}
+            add_system_log("info", f"Model '{model_identifier}' already loaded via llama-cpp-python — skipping reload.", "engine")
+            return {"status": "loaded", "backend": "llama_cpp", "model": model_identifier, "skipped": True}
+
         self.unload_model()
         self.active_model_name = model_identifier
         self.server_port = port
@@ -192,18 +207,18 @@ class LlamaEngine:
                 # Flash Attention flag
                 fa_val = cfg.get("flashAttention", True)
                 if fa_val is True or fa_val == "auto" or fa_val == "on":
-                    cmd.extend(["-fa"])
+                    cmd.extend(["-fa", "on"])
                 elif fa_val is False or fa_val == "off":
-                    cmd.extend(["--no-flash-attn"])
+                    cmd.extend(["-fa", "off"])
 
                 # Check for MTP / Speculative Decoding draft model file
                 mtp_file = self.find_mtp_draft_file(gguf_file)
                 if cfg.get("mtpSpeculativeDecoding", True) and mtp_file:
                     cmd.extend(["-md", str(mtp_file.resolve())])
                     if cfg.get("mtpMaxDraftTokens"):
-                        cmd.extend(["--draft-max", str(cfg["mtpMaxDraftTokens"])])
+                        cmd.extend(["--spec-draft-n-max", str(cfg["mtpMaxDraftTokens"])])
                     if cfg.get("mtpMinDraftTokens"):
-                        cmd.extend(["--draft-min", str(cfg["mtpMinDraftTokens"])])
+                        cmd.extend(["--spec-draft-n-min", str(cfg["mtpMinDraftTokens"])])
                     add_system_log("info", f"MTP Speculative Decoding draft model loaded: {mtp_file.name}", "llama-server")
 
                 # Seed flag
@@ -237,7 +252,13 @@ class LlamaEngine:
                     cmd.extend(["--mlock"])
 
                 if srv.get("requireAuth", False):
-                    cmd.extend(["--api-key", "m0x-secret"])
+                    key = srv.get("apiKey", "m0x-secret")
+                    if not key or not key.strip():
+                        key = "m0x-secret"
+                    self.api_key = key.strip()
+                    cmd.extend(["--api-key", self.api_key])
+                else:
+                    self.api_key = None
 
                 # Spawn background subprocess
                 self.server_process = subprocess.Popen(
@@ -264,6 +285,8 @@ class LlamaEngine:
                 if ready:
                     self.active_model_path = gguf_file
                     self.backend_type = "cuda_server"
+                    self._load_config = cfg
+                    self._load_server_settings = srv
                     add_system_log("info", "llama-server CUDA backend ACTIVE & model weights offloaded to VRAM!", "llama-server")
                     return {
                         "status": "loaded",
@@ -293,6 +316,8 @@ class LlamaEngine:
                 )
                 self.active_model_path = gguf_file
                 self.backend_type = "llama_cpp"
+                self._load_config = cfg
+                self._load_server_settings = srv
                 return {
                     "status": "loaded",
                     "backend": "llama_cpp",
@@ -358,12 +383,16 @@ class LlamaEngine:
         start_time = time.time()
         add_system_log("info", f"Processing chat completion prompt: \"{prompt[:60]}...\"", "engine")
 
-        # Auto-load model into GPU VRAM if not running
-        if (self.backend_type in ["none", "simulated"] or self.active_model_name != model_name) and models_dir is not None:
-            self.load_model(model_name, models_dir)
+        # Check if a server is ALREADY healthy and running
+        is_healthy = self._check_http_service(f"http://127.0.0.1:{self.server_port}/health")
+        
+        # Auto-load model into GPU VRAM only if server is not healthy/running
+        if not is_healthy and models_dir is not None:
+            self.load_model(model_name, models_dir, config=self._load_config, server_settings=self._load_server_settings)
+            is_healthy = self._check_http_service(f"http://127.0.0.1:{self.server_port}/health")
 
         # Backend 1: Subprocess CUDA llama-server (OpenAI API compatibility endpoint)
-        if self.backend_type == "cuda_server" or self._check_http_service(f"http://127.0.0.1:{self.server_port}/health"):
+        if self.backend_type == "cuda_server" or is_healthy:
             try:
                 url = f"http://127.0.0.1:{self.server_port}/v1/chat/completions"
                 # Build OpenAI-style message content (multimodal when an image is attached)
@@ -386,7 +415,11 @@ class LlamaEngine:
                     payload["repeat_penalty"] = repeat_penalty
 
                 req_data = json.dumps(payload).encode("utf-8")
-                req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+                req_headers = {"Content-Type": "application/json"}
+                if getattr(self, "api_key", None):
+                    req_headers["Authorization"] = f"Bearer {self.api_key}"
+
+                req = urllib.request.Request(url, data=req_data, headers=req_headers)
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     message = data["choices"][0]["message"]
