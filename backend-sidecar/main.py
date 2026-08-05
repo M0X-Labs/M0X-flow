@@ -469,7 +469,24 @@ def get_model_path(model_id: str) -> Optional[Path]:
 import hashlib
 
 def compute_dir_hash(directory: Path) -> str:
-    """Compute a basic checksum for a model directory based on its files and sizes."""
+    """Compute a basic checksum for a model directory based on its main model file."""
+    # Find the main model file (largest .gguf or .safetensors file)
+    main_file = None
+    max_size = 0
+    for p in directory.rglob("*"):
+        if p.is_file() and p.suffix.lower() in ('.gguf', '.safetensors', '.bin'):
+            size = p.stat().st_size
+            if size > max_size:
+                max_size = size
+                main_file = p
+    
+    if main_file:
+        hasher = hashlib.sha256()
+        hasher.update(main_file.name.encode('utf-8'))
+        hasher.update(str(main_file.stat().st_size).encode('utf-8'))
+        return hasher.hexdigest()
+    
+    # Fallback: hash all files
     hasher = hashlib.sha256()
     for p in sorted(directory.rglob("*")):
         if p.is_file():
@@ -1189,30 +1206,29 @@ async def host_model(req: HostModelRequest):
                 if clean_ip and clean_ip not in ["127.0.0.1", "localhost", local_host_ip] and clean_ip not in peer_ips:
                     peer_ips.append(clean_ip)
 
-        # Pre-flight check: verify all peers have the exact same model downloaded
+        # Pre-flight check: verify all peers have the model downloaded (any quantization)
         model_path_obj = get_model_path(req.model_id)
         model_path_str = str(model_path_obj) if model_path_obj else None
-        local_hash = compute_dir_hash(model_path_obj) if model_path_obj else None
+        add_system_log("info", f"Host Exo: model_id={req.model_id}, local_model_path={model_path_str}, peers={peer_ips}", "engine")
 
-        mismatched_peers = []
-        if local_hash:
-            for pip in peer_ips:
-                try:
-                    # Use standard urllib GET request
-                    import urllib.parse
-                    encoded_id = urllib.parse.quote(req.model_id, safe='')
-                    url = f"http://{pip}:14321/api/models/verify/{encoded_id}"
-                    req_obj = urllib.request.Request(url, headers={"User-Agent": "m0x-flow"})
-                    with urllib.request.urlopen(req_obj, timeout=3.0) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
-                        if data.get("status") != "ready" or data.get("checksum") != local_hash:
-                            mismatched_peers.append(pip)
-                except Exception as e:
-                    add_system_log("warn", f"Peer {pip} verification failed: {e}", "engine")
-                    mismatched_peers.append(pip)
+        missing_peers = []
+        for pip in peer_ips:
+            try:
+                import urllib.parse
+                encoded_id = urllib.parse.quote(req.model_id, safe='')
+                url = f"http://{pip}:14321/api/models/verify/{encoded_id}"
+                req_obj = urllib.request.Request(url, headers={"User-Agent": "m0x-flow"})
+                with urllib.request.urlopen(req_obj, timeout=3.0) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    # Just check if model is ready (exists), don't require exact checksum match
+                    if data.get("status") != "ready":
+                        missing_peers.append(pip)
+            except Exception as e:
+                add_system_log("warn", f"Peer {pip} verification failed: {e}", "engine")
+                missing_peers.append(pip)
 
-        if mismatched_peers:
-            error_msg = f"Model missing or mismatch on peers: {', '.join(mismatched_peers)}. Please download it on all devices."
+        if missing_peers:
+            error_msg = f"Model not downloaded on peers: {', '.join(missing_peers)}. Please download it on all devices."
             add_system_log("error", error_msg, "engine")
             return {"status": "error", "error": error_msg}
 
@@ -1984,6 +2000,7 @@ async def pods_join_cluster(req: PodsJoinClusterRequest):
     # Resolve local path for this node
     model_path_obj = get_model_path(req.model_id)
     model_path_str = str(model_path_obj) if model_path_obj else None
+    add_system_log("info", f"Pod join: model_id={req.model_id}, model_path={model_path_str}, host_ip={req.host_ip}", "engine")
 
     load_res = exo_engine_instance.start_daemon(
         model_identifier=req.model_id,
