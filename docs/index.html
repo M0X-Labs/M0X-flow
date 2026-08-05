@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>m0x-flow — Run frontier-scale LLMs on the hardware you own</title>
+  <meta name="description" content="m0x-flow is a lightweight Tauri + React desktop client with a Python FastAPI sidecar for running and orchestrating large language models locally — single devices and distributed P2P clusters." />
+  <meta property="og:title" content="m0x-flow ⚡" />
+  <meta property="og:description" content="Run and orchestrate large language models locally across single devices and distributed P2P clusters." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://github.com/M0X-Labs/M0X-flow" />
+  <link rel="icon" type="image/png" href="assets/logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ══════════════════ NAV ══════════════════ -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="#top">
+        <img src="assets/logo.png" alt="m0x-flow logo" class="brand-logo" width="28" height="28" />
+        <span class="brand-name">m0x-flow</span>
+        <span class="brand-tag mono">v0.1</span>
+      </a>
+      <div class="nav-links">
+        <a href="#engines">Engines</a>
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#quickstart">Quick Start</a>
+      </div>
+      <a class="btn btn-ghost mono" href="https://github.com/M0X-Labs/M0X-flow" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <!-- ══════════════════ HERO ══════════════════ -->
+  <header class="hero" id="top">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-inner">
+      <img src="assets/logo.png" alt="" class="hero-logo" width="120" height="120" />
+      <h1 class="hero-title">m0x<span class="accent">-flow</span> <span class="hero-bolt">⚡</span></h1>
+      <p class="hero-tagline">Run frontier-scale LLMs on the hardware you already own.</p>
+      <p class="hero-sub">
+        A high-performance, low-footprint desktop client built on <strong>Tauri v2 + React 19</strong>, backed by an
+        isolated <strong>Python FastAPI sidecar</strong>. Executes massive models (70B+ parameters) on consumer hardware
+        by dynamically switching between single-device layer swapping and local peer-to-peer cluster inference.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#quickstart">Get Started</a>
+        <a class="btn btn-ghost" href="https://github.com/M0X-Labs/M0X-flow" target="_blank" rel="noopener">View on GitHub →</a>
+      </div>
+
+      <div class="mode-pills" aria-label="Inference engine modes">
+        <span class="pill pill-blue"><i class="dot"></i>Standard · llama.cpp / GGUF</span>
+        <span class="pill pill-amber"><i class="dot"></i>AirLLM · single-device layer swap</span>
+        <span class="pill pill-emerald"><i class="dot"></i>Exo Pods · P2P cluster</span>
+      </div>
+
+      <div class="badges">
+        <a class="badge mono" href="https://tauri.app/" target="_blank" rel="noopener">Tauri v2</a>
+        <a class="badge mono" href="https://react.dev/" target="_blank" rel="noopener">React 19</a>
+        <a class="badge mono" href="https://www.typescriptlang.org/" target="_blank" rel="noopener">TypeScript 5.8</a>
+        <a class="badge mono" href="https://www.python.org/" target="_blank" rel="noopener">Python 3.10+</a>
+        <a class="badge mono" href="https://tailwindcss.com/" target="_blank" rel="noopener">Tailwind v4</a>
+        <a class="badge mono" href="https://fastapi.tiangolo.com/" target="_blank" rel="noopener">FastAPI</a>
+        <a class="badge mono" href="https://github.com/M0X-Labs/M0X-flow/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════════════════ STATS ══════════════════ -->
+  <section class="stats">
+    <div class="stats-inner">
+      <div class="stat"><span class="stat-num mono">3</span><span class="stat-label">Inference engines</span></div>
+      <div class="stat"><span class="stat-num mono">70B+</span><span class="stat-label">Parameter models</span></div>
+      <div class="stat"><span class="stat-num mono">1</span><span class="stat-label">Isolated Python sidecar</span></div>
+      <div class="stat"><span class="stat-num mono">0</span><span class="stat-label">Cloud round-trips</span></div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ ENGINES ══════════════════ -->
+  <section class="section" id="engines">
+    <div class="section-head">
+      <p class="kicker mono">Triple engine architecture</p>
+      <h2>One app. Three ways to run.</h2>
+      <p class="section-sub">Switch modes at runtime — the sidecar dispatches each workload to the right engine.</p>
+    </div>
+    <div class="cards cards-3">
+      <article class="card card-eng">
+        <div class="card-top">
+          <span class="card-icon" style="--ic:#3b82f6">⚡</span>
+          <span class="pill pill-blue"><i class="dot"></i>Standard</span>
+        </div>
+        <h3>llama.cpp / GGUF</h3>
+        <p>Direct GPU/CPU KV-cache execution with native support for Windows, macOS (Metal), Linux, NVIDIA (CUDA), AMD (Vulkan), Intel (Vulkan/SYCL), and CPU.</p>
+        <p class="footnote mono"><span class="ok">★</span> Best cross-device compatibility</p>
+      </article>
+      <article class="card card-eng">
+        <div class="card-top">
+          <span class="card-icon" style="--ic:#f59e0b">♻</span>
+          <span class="pill pill-amber"><i class="dot"></i>AirLLM</span>
+        </div>
+        <h3>Single-device layer swapping</h3>
+        <p>Swaps transformer layers from disk into VRAM sequentially, executing 70B+ models on low-VRAM machines — one device at a time.</p>
+        <p class="footnote mono"><span class="warn">●</span> Slow mode · layer-by-layer</p>
+      </article>
+      <article class="card card-eng">
+        <div class="card-top">
+          <span class="card-icon" style="--ic:#10b981">◉</span>
+          <span class="pill pill-emerald"><i class="dot"></i>Exo Pods</span>
+        </div>
+        <h3>P2P cluster inference</h3>
+        <p>Ring Memory-Weighted Partitioning shards LLM layers across Macs, PCs, and GPUs on your local Wi-Fi network — with live tensor flow.</p>
+        <p class="footnote mono"><span class="ok">✕</span> Distributed mesh · LAN</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ══════════════════ FEATURES ══════════════════ -->
+  <section class="section" id="features">
+    <div class="section-head">
+      <p class="kicker mono">Interface & tooling</p>
+      <h2>Everything local, nothing noisy.</h2>
+      <p class="section-sub">A monochromatic Obsidian interface engineered for clarity at a glance.</p>
+    </div>
+    <div class="cards cards-3">
+      <article class="card">
+        <h3>💬 Streaming Chat</h3>
+        <p>Auto-scrolling transcript with server-sent event streaming, markdown bubbles, prompt history, and a stop-generation control.</p>
+      </article>
+      <article class="card">
+        <h3>📦 Model Hub</h3>
+        <p>One-click Hugging Face downloads, local weight management, and disk-storage analytics with a total-capacity bar.</p>
+      </article>
+      <article class="card">
+        <h3>🕸 Pods Visualizer</h3>
+        <p>Real-time canvas powered by <code>@xyflow/react</code> — cluster topology, per-device memory, ping latency, and active tensor flow.</p>
+      </article>
+      <article class="card">
+        <h3>📊 Hardware HUD</h3>
+        <p>Live token-streaming throughput (tokens/sec) and VRAM monitoring overlay, always in the corner of the frame.</p>
+      </article>
+      <article class="card">
+        <h3>🛰 VPN / Tailscale ready</h3>
+        <p>Manual IP peer override plus configurable UDP broadcast port — discover and join pods even across virtual networks.</p>
+      </article>
+      <article class="card">
+        <h3>🔌 Anthropic-compatible API</h3>
+        <p>The sidecar exposes an Anthropic-compatible chat endpoint, so your existing tooling can talk to local models directly.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ══════════════════ ARCHITECTURE ══════════════════ -->
+  <section class="section" id="architecture">
+    <div class="section-head">
+      <p class="kicker mono">Three-tier system</p>
+      <h2>Decoupled, sidecar-first.</h2>
+      <p class="section-sub">The Rust shell owns the window; the Python sidecar owns the models.</p>
+    </div>
+    <div class="arch">
+      <div class="tier">
+        <div class="tier-icon">🖥</div>
+        <div class="tier-body">
+          <h3>Frontend <span class="mono dim">Tauri + React 19</span></h3>
+          <p>UI, state management, and the SSE stream consumer. Frameless native window with custom controls — a low RAM footprint from the start.</p>
+        </div>
+      </div>
+      <div class="arch-flow mono">▼ IPC · HTTP Server-Sent Events</div>
+      <div class="tier">
+        <div class="tier-icon">🐍</div>
+        <div class="tier-body">
+          <h3>Backend Orchestrator <span class="mono dim">Python FastAPI sidecar</span></h3>
+          <p>FastAPI server, engine process control, and HuggingFace Hub integration. Isolated from the UI — a crash never takes the window with it.</p>
+        </div>
+      </div>
+      <div class="arch-flow mono">▼ Process dispatch</div>
+      <div class="tier-row">
+        <div class="tier tier-sm">
+          <div class="tier-body">
+            <h3>AirLLM Engine</h3>
+            <p>Layer-wise disk → VRAM swapping on one device.</p>
+          </div>
+        </div>
+        <div class="tier tier-sm">
+          <div class="tier-body">
+            <h3>Exo Engine</h3>
+            <p>P2P cluster mesh for network inference.</p>
+          </div>
+        </div>
+        <div class="tier tier-sm">
+          <div class="tier-body">
+            <h3>llama.cpp</h3>
+            <p>Local llama-server for standard GGUF execution.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ QUICK START ══════════════════ -->
+  <section class="section" id="quickstart">
+    <div class="section-head">
+      <p class="kicker mono">From zero to local LLMs</p>
+      <h2>Quick Start</h2>
+      <p class="section-sub">Prerequisites: Node.js v18+, Rust v1.75+ with cargo, Python 3.10+.</p>
+    </div>
+    <div class="qs-grid">
+      <div class="codecard">
+        <div class="codecard-head mono"># 1 · clone + frontend <button class="copy-btn mono" data-copy="git clone https://github.com/M0X-Labs/M0X-flow.git&#10;cd m0x-flow&#10;npm install">copy</button></div>
+        <pre class="mono"><code>git clone https://github.com/M0X-Labs/M0X-flow.git
+cd m0x-flow
+npm install</code></pre>
+      </div>
+      <div class="codecard">
+        <div class="codecard-head mono"># 2 · sidecar (Windows) <button class="copy-btn mono" data-copy="cd backend-sidecar&#10;python -m venv venv&#10;.\venv\Scripts\activate&#10;pip install -r requirements.txt&#10;cd ..">copy</button></div>
+        <pre class="mono"><code>cd backend-sidecar
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+cd ..</code></pre>
+      </div>
+      <div class="codecard">
+        <div class="codecard-head mono"># 2 · sidecar (macOS / Linux) <button class="copy-btn mono" data-copy="cd backend-sidecar&#10;python -m venv venv&#10;source venv/bin/activate&#10;pip install -r requirements.txt&#10;cd ..">copy</button></div>
+        <pre class="mono"><code>cd backend-sidecar
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cd ..</code></pre>
+      </div>
+      <div class="codecard">
+        <div class="codecard-head mono"># 3 · run in dev mode <button class="copy-btn mono" data-copy="npm run tauri dev">copy</button></div>
+        <pre class="mono"><code>npm run tauri dev</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ FOOTER ══════════════════ -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <img src="assets/logo.png" alt="" width="28" height="28" />
+        <span>m0x-flow</span>
+      </div>
+      <p class="footer-tag dim">Lightweight desktop application for running and orchestrating large language models locally — across single devices and distributed P2P clusters.</p>
+      <div class="footer-links mono">
+        <a href="https://github.com/M0X-Labs/M0X-flow" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/M0X-Labs/M0X-flow/blob/main/README.md" target="_blank" rel="noopener">README</a>
+        <a href="https://github.com/M0X-Labs/M0X-flow/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md</a>
+        <a href="https://github.com/M0X-Labs/M0X-flow/blob/main/TECH_STACK.md" target="_blank" rel="noopener">TECH_STACK.md</a>
+        <a href="https://github.com/M0X-Labs/M0X-flow/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+      <p class="footer-copy dim">© 2026 M0X Labs · Built with Tauri, React, and a Python sidecar — no cloud required.</p>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
