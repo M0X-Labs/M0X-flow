@@ -126,8 +126,13 @@ export function ChatPage() {
           ? [{ type: "text", text }, { type: "image_url", image_url: { url: image } }]
           : text;
 
-        // Try direct llama-server OpenAI SSE streaming endpoint first
-        let response = await fetch(`http://127.0.0.1:${activePort}/v1/chat/completions`, {
+        // For Exo mode: try Exo API (port 52415) first, then sidecar fallback
+        // For Standard mode: try llama-server (port 8080) first, then sidecar fallback
+        const isExoMode = engineMode === "exo";
+        const primaryPort = isExoMode ? 52415 : activePort;
+
+        // Try direct OpenAI SSE streaming endpoint first
+        let response = await fetch(`http://127.0.0.1:${primaryPort}/v1/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -139,7 +144,7 @@ export function ChatPage() {
           }),
         }).catch(() => null);
 
-        // Fallback to sidecar 14321
+        // Fallback to sidecar 14321 (handles all engine modes)
         if (!response || !response.ok) {
           response = await fetch(`http://127.0.0.1:14321/api/chat/completions`, {
             method: "POST",

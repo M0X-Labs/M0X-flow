@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Network, RefreshCw, Plus, Zap, Play, Square, Server, X, Loader2, Copy, Check } from "lucide-react";
+import { Network, RefreshCw, Plus, Zap, Play, Square, Server, X, Loader2, Copy, Check, AlertTriangle } from "lucide-react";
 import { TopologyCanvas } from "@/components/pods/TopologyCanvas";
 import { NodeStatsCard, NodeInfo } from "@/components/pods/NodeStatsCard";
 import { useRuntimeStore } from "@/lib/useRuntimeStore";
@@ -72,6 +72,7 @@ export function PodsPage() {
   const [customIp, setCustomIp] = useState("");
   const [connectingPeer, setConnectingPeer] = useState(false);
   const [peerError, setPeerError] = useState<string | null>(null);
+  const [hostError, setHostError] = useState<string | null>(null);
 
   const isExoHosted = Boolean(hostedModel && hostedModel.id);
 
@@ -206,10 +207,41 @@ export function PodsPage() {
 
   const availableModelsToHost = downloadedModels.map((m) => ({ id: m.id, name: m.name }));
 
-  const handleSelectHostModel = (model: { id: string; name: string }) => {
-    hostModel(model.id, model.name, "exo");
+  const handleSelectHostModel = async (model: { id: string; name: string }) => {
+    setHostError(null);
     setShowHostModal(false);
+    try {
+      await hostModel(model.id, model.name, "exo", 52415);
+    } catch (err) {
+      // Error handled below via hostError modal
+    }
   };
+
+  const handleRemovePeer = async (ip: string) => {
+    try {
+      await fetch("http://localhost:14321/api/pods/remove-peer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip_address: ip }),
+      });
+      await fetchRealLanNodes();
+    } catch {
+      // ignore
+    }
+  };
+
+  // Listen for host errors from the runtime store (alert interceptor)
+  useEffect(() => {
+    const origAlert = window.alert;
+    window.alert = (msg: string) => {
+      if (typeof msg === 'string' && msg.includes('not downloaded on peers')) {
+        setHostError(msg);
+      } else {
+        origAlert(msg);
+      }
+    };
+    return () => { window.alert = origAlert; };
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-[#0b0b0e] text-[#e4e4e7] overflow-hidden relative select-none">
@@ -368,7 +400,7 @@ export function PodsPage() {
             {/* Hover / Selected Node Inspector Panel */}
             {currentSelectedNode && (
               <div className="absolute right-4 top-4 z-20">
-                <NodeStatsCard node={currentSelectedNode} />
+                <NodeStatsCard node={currentSelectedNode} onRemove={handleRemovePeer} />
               </div>
             )}
           </>
@@ -494,6 +526,55 @@ export function PodsPage() {
                 className="px-4 py-2 rounded-xl bg-[#18181c] hover:bg-[#222226] text-xs font-bold text-[#a1a1aa] border border-[#27272a]"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Host Error Modal — Shows when peers are missing the model */}
+      {hostError && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121215] border border-red-500/30 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#27272a] pb-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-red-400" />
+                <h3 className="text-sm font-bold text-red-400">Model Not Available on All Peers</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHostError(null)}
+                className="text-[#a1a1aa] hover:text-white p-1 rounded-lg hover:bg-[#18181c]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300 space-y-2">
+              <p className="font-medium">{hostError}</p>
+              <p className="text-red-400/80">
+                To run distributed inference, <strong>all peer devices must have the same model downloaded</strong>. 
+                Open the <strong>Model Hub</strong> page on each peer device and download the model.
+              </p>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setHostError(null)}
+                className="px-4 py-2 rounded-xl bg-[#18181c] hover:bg-[#222226] text-xs font-bold text-[#a1a1aa] border border-[#27272a]"
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setHostError(null);
+                  setShowHostModal(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all border border-emerald-500 cursor-pointer"
+              >
+                Retry Host
               </button>
             </div>
           </div>

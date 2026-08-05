@@ -1232,10 +1232,10 @@ async def host_model(req: HostModelRequest):
             add_system_log("error", error_msg, "engine")
             return {"status": "error", "error": error_msg}
 
-        # Start Exo P2P daemon passing known peer IPs and local model path
+        # Start Exo P2P daemon passing HuggingFace model ID and known peer IPs
+        # NOTE: exo uses HF model IDs, not local paths — it auto-discovers local cache
         load_res = exo_engine_instance.start_daemon(
             model_identifier=req.model_id,
-            model_path=model_path_str,
             config=req.config,
             peers=peer_ips,
         )
@@ -1683,24 +1683,52 @@ def get_local_ip() -> str:
     LOCAL_IP_CACHE = "0.0.0.0"
     return LOCAL_IP_CACHE
 
+def _parse_vram_gb(vram_str: str) -> float:
+    """Parse VRAM strings like '16.0 GB VRAM' or '8.0 GB' into float GB values."""
+    try:
+        # Extract first number from string
+        import re as _re
+        match = _re.search(r"(\d+\.?\d*)", str(vram_str))
+        if match:
+            return float(match.group(1))
+    except Exception:
+        pass
+    return 8.0  # reasonable default
+
+
 def get_real_host_node():
     """Discover real local host device name, platform GPU/CPU info, LAN IP, VRAM and RAM specs."""
     hostname = socket.gethostname()
     local_ip = get_local_ip()
 
     gpu_name, vram_str, ram_str = get_real_hardware_specs()
-    is_hosted = HOSTED_MODEL_STATE["is_hosted"]
+    is_hosted = HOSTED_MODEL_STATE["is_hosted"] and HOSTED_MODEL_STATE.get("engine_mode") == "exo"
+
+    # Compute dynamic VRAM allocation and layer assignment based on cluster proportions
+    alloc_str = "0.0 GB"
+    layers_str = "Standby (No Model Hosted)"
+    if is_hosted:
+        host_vram = _parse_vram_gb(vram_str)
+        all_vrams = [host_vram] + [_parse_vram_gb(p.get("totalMemory", "0")) for p in CACHED_LAN_PEERS]
+        total_pool = sum(all_vrams) or 1
+        host_fraction = host_vram / total_pool
+        # Estimate total model layers (default 40 for typical LLMs)
+        total_layers = 40
+        host_layers = max(1, round(total_layers * host_fraction))
+        alloc_str = f"{round(host_vram * host_fraction, 1)} GB"
+        layers_str = f"Layers 0-{host_layers - 1}"
+
     return {
         "id": "host-node",
         "hostname": f"{hostname} (Host Workstation)",
         "deviceType": gpu_name,
-        "allocatedMemory": "8.5 GB" if is_hosted else "0.0 GB",
+        "allocatedMemory": alloc_str,
         "totalMemory": vram_str,
         "ramSize": ram_str,
         "latencyMs": 0,
         "ipAddress": f"{local_ip} (Host)",
         "isHost": True,
-        "assignedLayers": "Layers 0-24" if is_hosted else "Standby (No Model Hosted)",
+        "assignedLayers": layers_str,
         "status": "active font-mono" if is_hosted else "rebalancing",
     }
 
@@ -1853,14 +1881,36 @@ def scan_real_lan_devices(full_sweep=False):
     # Track which manual peer IPs were verified (to update their saved metadata)
     verified_ips = set()
 
-    is_hosted = HOSTED_MODEL_STATE["is_hosted"]
+    is_hosted = HOSTED_MODEL_STATE["is_hosted"] and HOSTED_MODEL_STATE.get("engine_mode") == "exo"
+
+    # Pre-compute cluster VRAM pool for proportional allocation
+    gpu_name, host_vram_str, _ = get_real_hardware_specs()
+    host_vram = _parse_vram_gb(host_vram_str)
+    peer_vrams = [_parse_vram_gb(p.get("totalMemory", "0")) for p in verified_peers]
+    all_vrams = [host_vram] + peer_vrams
+    total_pool = sum(all_vrams) or 1
+    total_layers = 40  # typical LLM layer count
+    # Compute host layer count for offset
+    host_fraction = host_vram / total_pool
+    host_layer_count = max(1, round(total_layers * host_fraction))
+
     idx = 1
+    layer_offset = host_layer_count  # peers start after host layers
     for peer in verified_peers:
         ip = peer["ip"]
         verified_ips.add(ip)
         lat = measure_ping_latency(ip)
-        layers = f"Layers {25 + (idx - 1)*25}-{50 + (idx - 1)*25}" if is_hosted else "Standby (No Model Hosted)"
-        vram_alloc = "4.0 GB" if is_hosted else "0.0 GB"
+
+        if is_hosted:
+            peer_vram = _parse_vram_gb(peer.get("totalMemory", "0"))
+            peer_fraction = peer_vram / total_pool
+            peer_layer_count = max(1, round(total_layers * peer_fraction))
+            vram_alloc = f"{round(peer_vram * peer_fraction, 1)} GB"
+            layers = f"Layers {layer_offset}-{layer_offset + peer_layer_count - 1}"
+            layer_offset += peer_layer_count
+        else:
+            vram_alloc = "0.0 GB"
+            layers = "Standby (No Model Hosted)"
 
         discovered.append({
             "id": f"peer-node-{idx}",
@@ -1985,6 +2035,28 @@ async def connect_ip_peer(req: ConnectPeerRequest):
     threading.Thread(target=scan_real_lan_devices, daemon=True).start()
 
     return {"status": "connected", "peer": new_peer}
+
+
+@app.post("/api/pods/remove-peer")
+async def remove_ip_peer(req: ConnectPeerRequest):
+    """Remove a manually-added peer IP from saved peers and cached LAN peers."""
+    global CACHED_LAN_PEERS
+    ip = req.ip_address.strip()
+    if not ip:
+        raise HTTPException(status_code=400, detail="IP address cannot be empty.")
+
+    # Remove from MANUAL_PEERS
+    original_count = len(MANUAL_PEERS)
+    MANUAL_PEERS[:] = [p for p in MANUAL_PEERS if p.get("ipAddress") != ip]
+
+    # Remove from CACHED_LAN_PEERS
+    CACHED_LAN_PEERS = [p for p in CACHED_LAN_PEERS if p.get("ipAddress") != ip]
+
+    if len(MANUAL_PEERS) < original_count:
+        save_peers_to_config()
+        return {"status": "removed", "ip": ip}
+    else:
+        return {"status": "not_found", "ip": ip}
 
 
 @app.post("/api/pods/join-cluster")

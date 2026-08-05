@@ -102,6 +102,9 @@ class ExoEngine:
         config: Optional[dict] = None,
         peers: Optional[list] = None,
     ) -> Dict[str, Any]:
+        # NOTE: exo CLI expects a HuggingFace model ID (e.g. 'mlx-community/Llama-3.3-70B'),
+        # NOT a local filesystem path. We always use model_identifier as the HF repo ID.
+        # model_path is accepted but ignored — exo auto-discovers its local HF cache.
         """Start the Exo P2P daemon as a background subprocess for multi-PC clustering.
         
         If an external Exo daemon is already running, connects to it instead.
@@ -152,11 +155,9 @@ class ExoEngine:
             else:
                 cmd = [sys.executable, "-m", "exo", "run"]
 
-            # Model identifier parameter if provided
-            if model_path:
-                # Use local model path instead of HuggingFace ID
-                cmd.append(model_path)
-            elif model_identifier:
+            # Always pass the HuggingFace model ID (not local path)
+            # exo expects IDs like 'mlx-community/Llama-3.3-70B-Instruct-4bit'
+            if model_identifier:
                 cmd.append(model_identifier)
 
             # Add port if non-default

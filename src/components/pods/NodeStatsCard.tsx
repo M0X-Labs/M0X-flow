@@ -1,4 +1,4 @@
-import { Laptop, Cpu, Network, Wifi, Activity, ShieldCheck, HardDrive } from "lucide-react";
+import { Laptop, Cpu, Network, Wifi, Activity, ShieldCheck, HardDrive, Trash2, CheckCircle, XCircle } from "lucide-react";
 
 export interface NodeInfo {
   id: string;
@@ -12,16 +12,20 @@ export interface NodeInfo {
   isHost?: boolean;
   assignedLayers?: string;
   status: "active font-mono" | "rebalancing" | "offline";
+  modelSyncStatus?: "ready" | "missing" | "unknown";
 }
 
 interface NodeStatsCardProps {
   node: NodeInfo;
+  onRemove?: (ip: string) => void;
 }
 
 /**
  * NodeStatsCard — Displays hardware stats for a connected P2P node in the Exo mesh graph.
  */
-export function NodeStatsCard({ node }: NodeStatsCardProps) {
+export function NodeStatsCard({ node, onRemove }: NodeStatsCardProps) {
+  const cleanIp = node.ipAddress?.split(" ")[0] || "";
+
   return (
     <div className="bg-[#121215] border border-[#27272a] rounded-xl p-4 shadow-xl w-full sm:w-80">
       {/* Header Title */}
@@ -43,10 +47,12 @@ export function NodeStatsCard({ node }: NodeStatsCardProps) {
           </div>
         </div>
 
-        <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#18181c] text-[#f4f4f5] border border-[#27272a]">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-          ONLINE
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#18181c] text-[#f4f4f5] border border-[#27272a]">
+            <span className={`w-1.5 h-1.5 rounded-full ${node.status === "offline" ? "bg-red-500" : "bg-emerald-500"}`} />
+            {node.status === "offline" ? "OFFLINE" : "ONLINE"}
+          </span>
+        </div>
       </div>
 
       {/* Hardware Specs List */}
@@ -103,6 +109,27 @@ export function NodeStatsCard({ node }: NodeStatsCardProps) {
           </span>
         </div>
 
+        {/* Model Sync Status */}
+        {node.modelSyncStatus && node.modelSyncStatus !== "unknown" && (
+          <div className="flex justify-between items-center">
+            <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">
+              {node.modelSyncStatus === "ready" ? (
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <XCircle className="w-3.5 h-3.5 text-red-400" />
+              )}
+              Model Sync
+            </span>
+            <span className={`font-mono font-bold text-[10px] px-2 py-0.5 rounded border ${
+              node.modelSyncStatus === "ready"
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                : "bg-red-500/10 text-red-400 border-red-500/20"
+            }`}>
+              {node.modelSyncStatus === "ready" ? "DOWNLOADED ✓" : "NOT DOWNLOADED"}
+            </span>
+          </div>
+        )}
+
         {node.assignedLayers && (
           <div className="flex justify-between items-center pt-2 border-t border-[#27272a]">
             <span className="text-[#a1a1aa] flex items-center gap-2 font-medium">
@@ -115,13 +142,23 @@ export function NodeStatsCard({ node }: NodeStatsCardProps) {
         )}
       </div>
 
-      {/* Encryption & Cluster Protection Badge */}
-      <div className="flex items-center gap-2 mt-1 pt-2 border-t border-[#27272a] text-[10px] text-[#71717a] font-sans">
-        <ShieldCheck className="w-3.5 h-3.5 text-[#a1a1aa] shrink-0" />
-        <span className="font-medium">m0x Exo UDP Encrypted Peer Mesh</span>
+      {/* Footer: Encryption Badge + Remove Button */}
+      <div className="flex items-center justify-between mt-1 pt-2 border-t border-[#27272a]">
+        <div className="flex items-center gap-2 text-[10px] text-[#71717a] font-sans">
+          <ShieldCheck className="w-3.5 h-3.5 text-[#a1a1aa] shrink-0" />
+          <span className="font-medium">m0x Exo UDP Encrypted Peer Mesh</span>
+        </div>
+        {!node.isHost && onRemove && cleanIp && (
+          <button
+            type="button"
+            onClick={() => onRemove(cleanIp)}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-[10px] font-bold transition-all cursor-pointer"
+            title={`Remove peer ${cleanIp}`}
+          >
+            <Trash2 className="w-3 h-3" /> Remove
+          </button>
+        )}
       </div>
     </div>
   );
 }
-
-
