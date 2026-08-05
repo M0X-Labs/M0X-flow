@@ -97,6 +97,7 @@ class ExoEngine:
     def start_daemon(
         self,
         model_identifier: str = "",
+        model_path: str = None,
         port: int = None,
         config: Optional[dict] = None,
         peers: Optional[list] = None,
@@ -152,7 +153,10 @@ class ExoEngine:
                 cmd = [sys.executable, "-m", "exo", "run"]
 
             # Model identifier parameter if provided
-            if model_identifier:
+            if model_path:
+                # Use local model path instead of HuggingFace ID
+                cmd.append(model_path)
+            elif model_identifier:
                 cmd.append(model_identifier)
 
             # Add port if non-default

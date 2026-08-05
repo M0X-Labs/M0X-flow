@@ -156,6 +156,9 @@ export function useRuntimeStore() {
     })
       .then((res) => res.json())
       .then((data) => {
+        if (data.status === "error" && data.error) {
+          alert(data.error);
+        }
         // Update engine label based on actual load result
         const loadStatus = data?.engine_load?.status || "unknown";
         const engineLabel = loadStatus === "error"

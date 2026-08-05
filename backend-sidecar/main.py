@@ -453,6 +453,50 @@ class ChatCompletionRequest(BaseModel):
     repeat_penalty: Optional[float] = None
 
 
+def get_model_path(model_id: str) -> Optional[Path]:
+    """Helper to get the absolute path to a downloaded model."""
+    curr_dir = get_current_models_dir()
+    safe_name = model_id.replace("/", "--")
+    target = curr_dir / safe_name
+    if target.exists() and target.is_dir():
+        return target
+    # Fallback to direct name
+    target = curr_dir / model_id
+    if target.exists() and target.is_dir():
+        return target
+    return None
+
+import hashlib
+
+def compute_dir_hash(directory: Path) -> str:
+    """Compute a basic checksum for a model directory based on its files and sizes."""
+    hasher = hashlib.sha256()
+    for p in sorted(directory.rglob("*")):
+        if p.is_file():
+            hasher.update(p.name.encode('utf-8'))
+            hasher.update(str(p.stat().st_size).encode('utf-8'))
+    return hasher.hexdigest()
+
+@app.get("/api/models/verify/{model_id:path}")
+async def verify_model(model_id: str):
+    """Verify if a model is downloaded and return its checksum for Exo Pods pre-flight check."""
+    model_path = get_model_path(model_id)
+    if not model_path:
+        return {"status": "missing", "model_id": model_id}
+    
+    file_count = sum(1 for f in model_path.rglob("*") if f.is_file())
+    total_size = sum(f.stat().st_size for f in model_path.rglob("*") if f.is_file())
+    checksum = compute_dir_hash(model_path)
+    
+    return {
+        "status": "ready",
+        "model_id": model_id,
+        "file_count": file_count,
+        "total_size": total_size,
+        "checksum": checksum,
+    }
+
+
 @app.post("/api/models/download")
 async def download_model(req: DownloadRequest):
     """Trigger physical streaming download from Hugging Face Hub into configured models directory."""
@@ -1145,9 +1189,37 @@ async def host_model(req: HostModelRequest):
                 if clean_ip and clean_ip not in ["127.0.0.1", "localhost", local_host_ip] and clean_ip not in peer_ips:
                     peer_ips.append(clean_ip)
 
-        # Start Exo P2P daemon passing known peer IPs
+        # Pre-flight check: verify all peers have the exact same model downloaded
+        model_path_obj = get_model_path(req.model_id)
+        model_path_str = str(model_path_obj) if model_path_obj else None
+        local_hash = compute_dir_hash(model_path_obj) if model_path_obj else None
+
+        mismatched_peers = []
+        if local_hash:
+            for pip in peer_ips:
+                try:
+                    # Use standard urllib GET request
+                    import urllib.parse
+                    encoded_id = urllib.parse.quote(req.model_id, safe='')
+                    url = f"http://{pip}:14321/api/models/verify/{encoded_id}"
+                    req_obj = urllib.request.Request(url, headers={"User-Agent": "m0x-flow"})
+                    with urllib.request.urlopen(req_obj, timeout=3.0) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        if data.get("status") != "ready" or data.get("checksum") != local_hash:
+                            mismatched_peers.append(pip)
+                except Exception as e:
+                    add_system_log("warn", f"Peer {pip} verification failed: {e}", "engine")
+                    mismatched_peers.append(pip)
+
+        if mismatched_peers:
+            error_msg = f"Model missing or mismatch on peers: {', '.join(mismatched_peers)}. Please download it on all devices."
+            add_system_log("error", error_msg, "engine")
+            return {"status": "error", "error": error_msg}
+
+        # Start Exo P2P daemon passing known peer IPs and local model path
         load_res = exo_engine_instance.start_daemon(
             model_identifier=req.model_id,
+            model_path=model_path_str,
             config=req.config,
             peers=peer_ips,
         )
@@ -1909,8 +1981,13 @@ async def pods_join_cluster(req: PodsJoinClusterRequest):
     llama_engine_instance.unload_model()
     airllm_engine_instance.unload()
 
+    # Resolve local path for this node
+    model_path_obj = get_model_path(req.model_id)
+    model_path_str = str(model_path_obj) if model_path_obj else None
+
     load_res = exo_engine_instance.start_daemon(
         model_identifier=req.model_id,
+        model_path=model_path_str,
         peers=[req.host_ip],
     )
     HOSTED_MODEL_STATE["is_hosted"] = True
