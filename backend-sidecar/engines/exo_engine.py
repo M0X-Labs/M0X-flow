@@ -137,13 +137,14 @@ class ExoEngine:
 
         # Try to start Exo daemon
         if not EXO_AVAILABLE and not EXO_CLI_AVAILABLE:
-            self._log("error", f"Exo not installed. Error: {_EXO_IMPORT_ERROR}")
-            self._log("info", "Install with: pip install exo-explore")
+            win_note = " Exo requires macOS, Linux, or WSL (Windows Subsystem for Linux) due to Unix file-locking dependencies in exo-rs. On Windows, use Standard CUDA Engine for direct GPU execution." if sys.platform == "win32" else ""
+            err_msg = f"Exo daemon not found in Python environment.{win_note}"
+            self._log("error", err_msg)
             return {
                 "status": "error",
                 "backend": "exo_pods",
-                "error": f"Exo not installed: {_EXO_IMPORT_ERROR}",
-                "install_hint": "pip install exo-explore",
+                "error": err_msg,
+                "install_hint": "Use Standard CUDA Engine on Windows, or run Exo inside WSL (Windows Subsystem for Linux) / macOS.",
             }
 
         self._log("info", "Starting Exo P2P cluster daemon across network...")
