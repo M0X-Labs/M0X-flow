@@ -612,6 +612,20 @@ class TunnelConfigRequest(BaseModel):
     host_ip: str = "127.0.0.1"
 
 
+class ConnectPeerRequest(BaseModel):
+    ip_address: str
+
+
+class PodsJoinClusterRequest(BaseModel):
+    model_id: str
+    host_ip: str
+    port: int = 52415
+
+
+class PodsUnhostClusterRequest(BaseModel):
+    host_ip: Optional[str] = None
+
+
 HOSTED_MODEL_STATE = {
     "is_hosted": False,
     "model_id": None,
@@ -1119,12 +1133,43 @@ async def host_model(req: HostModelRequest):
         # Unload any other engines first
         llama_engine_instance.unload_model()
         airllm_engine_instance.unload()
-        # Start Exo P2P daemon
+
+        # Collect candidate peer IPs for multi-PC mesh connection
+        peer_ips = []
+        local_host_ip = get_local_ip()
+        all_candidate_peers = CACHED_LAN_PEERS + MANUAL_PEERS
+        for peer in all_candidate_peers:
+            ip = peer.get("ipAddress") or peer.get("ip")
+            if ip:
+                clean_ip = str(ip).split()[0].strip()
+                if clean_ip and clean_ip not in ["127.0.0.1", "localhost", local_host_ip] and clean_ip not in peer_ips:
+                    peer_ips.append(clean_ip)
+
+        # Start Exo P2P daemon passing known peer IPs
         load_res = exo_engine_instance.start_daemon(
             model_identifier=req.model_id,
             config=req.config,
+            peers=peer_ips,
         )
-        add_system_log("info", f"Exo Pods engine start result: {load_res.get('status', 'unknown')}", "engine")
+        add_system_log("info", f"Exo Pods engine start result: {load_res.get('status', 'unknown')} (Peers: {peer_ips or 'auto-discovery'})", "engine")
+
+        # Broadcast cluster join notification to peer m0x-flow sidecars
+        if peer_ips:
+            def notify_peers_join_async():
+                for pip in peer_ips:
+                    try:
+                        url = f"http://{pip}:14321/api/pods/join-cluster"
+                        payload = json.dumps({"model_id": req.model_id, "host_ip": local_host_ip}).encode("utf-8")
+                        req_obj = urllib.request.Request(
+                            url,
+                            data=payload,
+                            headers={"Content-Type": "application/json", "User-Agent": "m0x-pods-cluster-orchestrator"}
+                        )
+                        with urllib.request.urlopen(req_obj, timeout=2.5):
+                            pass
+                    except Exception as err:
+                        add_system_log("warn", f"Could not send pod join trigger to peer {pip}: {err}", "engine")
+            threading.Thread(target=notify_peers_join_async, daemon=True).start()
     else:
         # Standard llama.cpp engine (default)
         airllm_engine_instance.unload()
@@ -1173,6 +1218,34 @@ async def host_model(req: HostModelRequest):
 async def unhost_model():
     """Un-host active model from sidecar / Exo cluster. Cleans up ALL engine types."""
     await asyncio.to_thread(stop_real_cloudflare_tunnel)
+
+    # If Exo was running, notify peer devices to unhost as well
+    if exo_engine_instance.is_running:
+        local_host_ip = get_local_ip()
+        peer_ips = []
+        for peer in CACHED_LAN_PEERS + MANUAL_PEERS:
+            ip = peer.get("ipAddress") or peer.get("ip")
+            if ip:
+                clean_ip = str(ip).split()[0].strip()
+                if clean_ip and clean_ip not in ["127.0.0.1", "localhost", local_host_ip] and clean_ip not in peer_ips:
+                    peer_ips.append(clean_ip)
+
+        def notify_peers_unhost_async():
+            for pip in peer_ips:
+                try:
+                    url = f"http://{pip}:14321/api/pods/unhost-cluster"
+                    payload = json.dumps({"host_ip": local_host_ip}).encode("utf-8")
+                    req_obj = urllib.request.Request(
+                        url,
+                        data=payload,
+                        headers={"Content-Type": "application/json", "User-Agent": "m0x-pods-cluster-orchestrator"}
+                    )
+                    with urllib.request.urlopen(req_obj, timeout=2.0):
+                        pass
+                except Exception:
+                    pass
+        threading.Thread(target=notify_peers_unhost_async, daemon=True).start()
+
     # Unload ALL engines to ensure clean state
     llama_engine_instance.unload_model()
     airllm_engine_instance.unload()
@@ -1826,8 +1899,41 @@ async def connect_ip_peer(req: ConnectPeerRequest):
     return {"status": "connected", "peer": new_peer}
 
 
+@app.post("/api/pods/join-cluster")
+async def pods_join_cluster(req: PodsJoinClusterRequest):
+    """Notification endpoint called by a host workstation asking this peer to join Exo cluster mesh."""
+    if not get_pods_enabled():
+        return {"status": "ignored", "reason": "Pods sharing disabled on this device"}
+
+    # Unload standard/airllm engines to free VRAM for cluster mesh
+    llama_engine_instance.unload_model()
+    airllm_engine_instance.unload()
+
+    load_res = exo_engine_instance.start_daemon(
+        model_identifier=req.model_id,
+        peers=[req.host_ip],
+    )
+    HOSTED_MODEL_STATE["is_hosted"] = True
+    HOSTED_MODEL_STATE["model_id"] = req.model_id
+    HOSTED_MODEL_STATE["model_name"] = f"{req.model_id} (Peer Node)"
+    HOSTED_MODEL_STATE["engine_mode"] = "exo"
+    add_system_log("info", f"Joined Exo Pods cluster hosted by {req.host_ip} for model {req.model_id}", "engine")
+    return {"status": "joined", "host": req.host_ip, "model": req.model_id, "res": load_res}
+
+
+@app.post("/api/pods/unhost-cluster")
+async def pods_unhost_cluster(req: PodsUnhostClusterRequest):
+    """Notification endpoint called when cluster hosting is stopped."""
+    exo_engine_instance.stop_daemon()
+    HOSTED_MODEL_STATE["is_hosted"] = False
+    HOSTED_MODEL_STATE["model_id"] = None
+    HOSTED_MODEL_STATE["model_name"] = None
+    add_system_log("info", f"Received cluster unhost signal from {req.host_ip or 'host'}", "engine")
+    return {"status": "unhosted"}
+
+
 def ensure_windows_firewall_rule():
-    """Ensure Windows Firewall allows inbound connections on TCP port 14321 for m0x-flow P2P Pods."""
+    """Ensure Windows Firewall allows inbound connections on TCP/UDP port 14321 and TCP port 52415 for m0x-flow P2P Pods."""
     if sys.platform == "win32":
         try:
             check = subprocess.run(
@@ -1837,8 +1943,10 @@ def ensure_windows_firewall_rule():
                 text=True,
             )
             if "No rules match" in check.stdout or not check.stdout:
-                cmd = 'netsh advfirewall firewall add rule name="m0x-flow Pods P2P" dir=in action=allow protocol=TCP localport=14321'
-                subprocess.run(cmd, shell=True, capture_output=True)
+                cmd1 = 'netsh advfirewall firewall add rule name="m0x-flow Pods P2P" dir=in action=allow protocol=TCP localport=14321,52415'
+                cmd2 = 'netsh advfirewall firewall add rule name="m0x-flow Pods UDP" dir=in action=allow protocol=UDP localport=14321'
+                subprocess.run(cmd1, shell=True, capture_output=True)
+                subprocess.run(cmd2, shell=True, capture_output=True)
         except Exception:
             pass
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Network, RefreshCw, Plus, Zap, Play, Square, Server, X, Loader2 } from "lucide-react";
+import { Network, RefreshCw, Plus, Zap, Play, Square, Server, X, Loader2, Copy, Check } from "lucide-react";
 import { TopologyCanvas } from "@/components/pods/TopologyCanvas";
 import { NodeStatsCard, NodeInfo } from "@/components/pods/NodeStatsCard";
 import { useRuntimeStore } from "@/lib/useRuntimeStore";
@@ -68,11 +68,24 @@ export function PodsPage() {
   const [rescanning, setRescanning] = useState(false);
   const [showHostModal, setShowHostModal] = useState(false);
   const [showPeerModal, setShowPeerModal] = useState(false);
+  const [copiedIp, setCopiedIp] = useState(false);
   const [customIp, setCustomIp] = useState("");
   const [connectingPeer, setConnectingPeer] = useState(false);
   const [peerError, setPeerError] = useState<string | null>(null);
 
   const isExoHosted = Boolean(hostedModel && hostedModel.id);
+
+  const hostNodeIp = useMemo(() => {
+    const host = realNodes.find((n) => n.isHost);
+    return host?.ipAddress ? host.ipAddress.split(" ")[0] : "127.0.0.1";
+  }, [realNodes]);
+
+  const handleCopyHostIp = () => {
+    if (!hostNodeIp) return;
+    navigator.clipboard.writeText(hostNodeIp);
+    setCopiedIp(true);
+    setTimeout(() => setCopiedIp(false), 2000);
+  };
 
   // Fetch real LAN devices from backend sidecar API
   const fetchRealLanNodes = useCallback(async () => {
@@ -246,6 +259,17 @@ export function PodsPage() {
           >
             <div className={`w-2.5 h-2.5 rounded-full ${podsEnabled ? "bg-emerald-400 animate-pulse" : "bg-[#52525b]"}`} />
             <span>{podsEnabled ? "Pods Sharing: ENABLED" : "Pods Sharing: DISABLED"}</span>
+          </button>
+
+          {/* Copy Local Node IP Button */}
+          <button
+            type="button"
+            onClick={handleCopyHostIp}
+            className="px-3 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a] hover:border-[#3f3f46] text-xs font-mono text-[#a1a1aa] hover:text-[#f4f4f5] transition-all flex items-center gap-1.5 cursor-pointer"
+            title="Click to copy your node IP address for pairing other PCs"
+          >
+            {copiedIp ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-[#a1a1aa]" />}
+            <span>{copiedIp ? "IP Copied!" : `IP: ${hostNodeIp}`}</span>
           </button>
 
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#18181c] border border-[#27272a] text-xs font-mono">

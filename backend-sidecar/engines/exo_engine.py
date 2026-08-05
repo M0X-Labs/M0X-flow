@@ -99,8 +99,9 @@ class ExoEngine:
         model_identifier: str = "",
         port: int = None,
         config: Optional[dict] = None,
+        peers: Optional[list] = None,
     ) -> Dict[str, Any]:
-        """Start the Exo P2P daemon as a background subprocess.
+        """Start the Exo P2P daemon as a background subprocess for multi-PC clustering.
         
         If an external Exo daemon is already running, connects to it instead.
         
@@ -108,6 +109,7 @@ class ExoEngine:
             model_identifier: Model to prepare for inference
             port: API port (default 52415)
             config: Additional configuration
+            peers: List of peer IP addresses to pair with
         """
         self.stop_daemon()
 
@@ -140,7 +142,7 @@ class ExoEngine:
                 "install_hint": "pip install exo-explore",
             }
 
-        self._log("info", "Starting Exo P2P daemon...")
+        self._log("info", "Starting Exo P2P cluster daemon across network...")
 
         try:
             # Determine the command to launch exo
@@ -149,11 +151,31 @@ class ExoEngine:
             else:
                 cmd = [sys.executable, "-m", "exo", "run"]
 
+            # Model identifier parameter if provided
+            if model_identifier:
+                cmd.append(model_identifier)
+
             # Add port if non-default
             if self.api_port != self.DEFAULT_PORT:
                 cmd.extend(["--chatgpt-api-port", str(self.api_port)])
 
-            self._log("info", f"Launching: {' '.join(cmd)}")
+            # Pass peer IP parameters if provided
+            clean_peers = []
+            if peers:
+                for p in peers:
+                    clean_ip = str(p).split()[0].strip()
+                    if clean_ip and clean_ip not in ["127.0.0.1", "localhost", "0.0.0.0"]:
+                        clean_peers.append(clean_ip)
+                        cmd.extend(["--peer", clean_ip])
+
+            # Prepare environment variables allowing inter-PC access
+            import os
+            env = os.environ.copy()
+            env["EXO_HOST"] = "0.0.0.0"
+            if clean_peers:
+                env["EXO_PEERS"] = ",".join(clean_peers)
+
+            self._log("info", f"Launching Exo daemon: {' '.join(cmd)} (peers: {clean_peers or 'auto-discovery'})")
 
             self.process = subprocess.Popen(
                 cmd,
@@ -161,6 +183,7 @@ class ExoEngine:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
 
