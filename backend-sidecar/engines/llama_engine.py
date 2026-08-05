@@ -337,7 +337,19 @@ class LlamaEngine:
             add_system_log("info", "Connected to vLLM server endpoint (http://localhost:8000/v1)", "vllm")
             return {"status": "loaded", "backend": "vllm_api", "model": model_identifier, "endpoint": "http://localhost:8000/v1"}
 
-        # 4. Standard simulated fallback
+        # 4. Return error if a GGUF file was targeted but failed to load
+        if gguf_file:
+            err_msg = f"Failed to load GGUF model file '{gguf_file.name}'. The model (140B MoE) may be too large to fit into available GPU VRAM (16GB), or require more layers offloaded to CPU RAM. Try a smaller model (e.g. 7B/8B)."
+            add_system_log("error", err_msg, "engine")
+            return {
+                "status": "error",
+                "backend": "none",
+                "model": model_identifier,
+                "error": err_msg,
+                "install_hint": "Try running a smaller model (e.g., Qwen2.5-7B or Llama-3.2-3B) or lowering Context Length in settings."
+            }
+
+        # 5. Simulated fallback for non-GGUF / mock models
         self.backend_type = "simulated"
         add_system_log("info", f"Standard engine initialized for {model_identifier}", "engine")
         return {
