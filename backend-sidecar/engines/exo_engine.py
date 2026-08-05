@@ -192,7 +192,7 @@ class ExoEngine:
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
 
-            # Start background log reader thread
+            recent_logs = []
             def log_reader():
                 try:
                     if self.process and self.process.stdout:
@@ -202,6 +202,9 @@ class ExoEngine:
                                 if stripped:
                                     lvl = "error" if "error" in stripped.lower() or "fail" in stripped.lower() else "info"
                                     self._log(lvl, stripped)
+                                    recent_logs.append(stripped)
+                                    if len(recent_logs) > 20:
+                                        recent_logs.pop(0)
                 except Exception:
                     pass
 
@@ -211,10 +214,11 @@ class ExoEngine:
             # Wait for the daemon API to become ready
             ready = False
             start_time = time.time()
+            exited_code = None
             while time.time() - start_time < self.STARTUP_TIMEOUT:
-                if self.process.poll() is not None:
+                exited_code = self.process.poll()
+                if exited_code is not None:
                     # Process exited prematurely
-                    self._log("error", "Exo daemon exited prematurely")
                     break
                 if self._check_api_ready():
                     ready = True
@@ -231,14 +235,21 @@ class ExoEngine:
                     "api_base": self.api_base,
                 }
             else:
-                self._log("warn", "Exo daemon started but API not ready within timeout. It may still be initializing.")
-                self.is_running = True  # Optimistic — daemon may still be starting
+                exited_code = self.process.poll()
+                self.stop_daemon()
+                log_snippet = " ".join(recent_logs[-5:]) if recent_logs else "No log output captured."
+                if exited_code is not None:
+                    err_msg = f"Exo daemon process exited with code {exited_code}. Output: {log_snippet}"
+                else:
+                    err_msg = f"Exo daemon API did not respond within {self.STARTUP_TIMEOUT}s on port {self.api_port}."
+                
+                self._log("error", f"Exo daemon start failed: {err_msg}")
                 return {
-                    "status": "starting",
+                    "status": "error",
                     "backend": "exo_pods",
                     "model": model_identifier,
-                    "api_base": self.api_base,
-                    "note": "Daemon started but API not yet ready — may need more time for peer discovery",
+                    "error": err_msg,
+                    "install_hint": "Install Exo with Python 3.13: pip install exo-explore",
                 }
 
         except Exception as e:
@@ -248,6 +259,7 @@ class ExoEngine:
                 "status": "error",
                 "backend": "exo_pods",
                 "error": str(e),
+                "install_hint": "Install Exo with Python 3.13: pip install exo-explore",
             }
 
     def stop_daemon(self):

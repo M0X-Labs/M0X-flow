@@ -623,16 +623,14 @@ async def chat_completions(req: ChatCompletionRequest):
         else:
             # Try to start daemon and then generate
             start_res = exo_engine_instance.start_daemon(model_identifier=model_name)
-            if start_res.get("status") in ["loaded", "connected", "starting"]:
-                # Give the daemon a moment to settle
-                import asyncio
-                await asyncio.sleep(2)
+            if start_res.get("status") in ["loaded", "connected"]:
                 gen_res = exo_engine_instance.chat_completion(prompt=req.prompt, model=model_name)
                 response = gen_res["content"]
                 speed = gen_res["tokens_per_sec"]
                 usage = gen_res.get("usage", {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0})
             else:
-                response = f"[Exo Pods Error] Failed to start daemon: {start_res.get('error', 'Unknown error')}"
+                hint = start_res.get("install_hint", "Install exo-explore with Python 3.13 or switch to Standard CUDA engine")
+                response = f"[Exo Pods Error] Cannot run model on Exo: {start_res.get('error', 'Exo daemon is offline or not installed')}\n\n💡 Action: {hint}"
                 speed = 0.0
                 usage = {"prompt_tokens": len(req.prompt.split()), "completion_tokens": 0}
     else:
@@ -1272,6 +1270,20 @@ async def host_model(req: HostModelRequest):
 
     if req.server_settings:
         SERVER_SETTINGS_STATE.update(req.server_settings)
+
+    if load_res and load_res.get("status") == "error":
+        HOSTED_MODEL_STATE["is_hosted"] = False
+        HOSTED_MODEL_STATE["model_id"] = None
+        HOSTED_MODEL_STATE["model_name"] = None
+        err_msg = load_res.get("error", "Model hosting failed")
+        add_system_log("error", f"Model hosting failed for engine {engine}: {err_msg}", "engine")
+        return {
+            "status": "error",
+            "error": err_msg,
+            "install_hint": load_res.get("install_hint"),
+            "engine_load": load_res,
+            "state": HOSTED_MODEL_STATE,
+        }
 
     HOSTED_MODEL_STATE["is_hosted"] = True
     HOSTED_MODEL_STATE["model_id"] = req.model_id
@@ -2079,6 +2091,11 @@ async def pods_join_cluster(req: PodsJoinClusterRequest):
         model_path=model_path_str,
         peers=[req.host_ip],
     )
+    if load_res.get("status") == "error":
+        HOSTED_MODEL_STATE["is_hosted"] = False
+        add_system_log("error", f"Failed to join Exo Pods cluster hosted by {req.host_ip}: {load_res.get('error')}", "engine")
+        return {"status": "error", "error": load_res.get("error"), "host": req.host_ip, "model": req.model_id, "res": load_res}
+
     HOSTED_MODEL_STATE["is_hosted"] = True
     HOSTED_MODEL_STATE["model_id"] = req.model_id
     HOSTED_MODEL_STATE["model_name"] = f"{req.model_id} (Peer Node)"

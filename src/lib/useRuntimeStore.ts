@@ -156,9 +156,21 @@ export function useRuntimeStore() {
     })
       .then((res) => res.json())
       .then((data) => {
-        if (data.status === "error" && data.error) {
-          alert(data.error);
+        if (data.status === "error") {
+          globalHostedModel = null;
+          const errorMsg = data.error || "Failed to host model";
+          const hint = data.install_hint ? `\n\n💡 ${data.install_hint}` : "";
+          alert(`⚠️ Hosting Error: ${errorMsg}${hint}`);
+
+          globalMetrics = {
+            ...globalMetrics,
+            isRunning: false,
+            activeEngine: `${engineMode === "exo" ? "Exo Pods" : engineMode === "airllm" ? "AirLLM" : "Standard"} (${name}) — Failed`,
+          };
+          notify();
+          return;
         }
+
         // Update engine label based on actual load result
         const loadStatus = data?.engine_load?.status || "unknown";
         const engineLabel = loadStatus === "error"

@@ -234,7 +234,7 @@ export function PodsPage() {
   useEffect(() => {
     const origAlert = window.alert;
     window.alert = (msg: string) => {
-      if (typeof msg === 'string' && msg.includes('not downloaded on peers')) {
+      if (typeof msg === 'string' && (msg.includes('not downloaded on peers') || msg.includes('Hosting Error') || msg.includes('Exo daemon'))) {
         setHostError(msg);
       } else {
         origAlert(msg);
@@ -532,14 +532,16 @@ export function PodsPage() {
         </div>
       )}
 
-      {/* Host Error Modal — Shows when peers are missing the model */}
+      {/* Host Error Modal — Shows when hosting or daemon fails */}
       {hostError && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121215] border border-red-500/30 rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+          <div className="bg-[#121215] border border-red-500/30 rounded-2xl w-full max-w-lg p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-[#27272a] pb-3">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-red-400" />
-                <h3 className="text-sm font-bold text-red-400">Model Not Available on All Peers</h3>
+                <h3 className="text-sm font-bold text-red-400">
+                  {hostError.includes('not downloaded') ? 'Model Not Downloaded on Peers' : 'Exo Pods Engine Error'}
+                </h3>
               </div>
               <button
                 type="button"
@@ -550,15 +552,20 @@ export function PodsPage() {
               </button>
             </div>
 
-            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300 space-y-2">
-              <p className="font-medium">{hostError}</p>
-              <p className="text-red-400/80">
-                To run distributed inference, <strong>all peer devices must have the same model downloaded</strong>. 
-                Open the <strong>Model Hub</strong> page on each peer device and download the model.
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300 space-y-2 font-mono">
+              <p className="font-medium whitespace-pre-wrap">{hostError}</p>
+            </div>
+
+            <div className="text-xs text-[#a1a1aa] bg-[#18181c] p-3 rounded-xl border border-[#27272a] space-y-1">
+              <p className="font-bold text-white">💡 Direct Solution:</p>
+              <p>
+                {hostError.includes('Python') || hostError.includes('Exo')
+                  ? 'Exo P2P Mesh requires Python 3.13 (`pip install exo-explore`). You can instantly run this model locally with 100% CUDA GPU VRAM offload using the Standard llama.cpp engine.'
+                  : 'Ensure all peer PCs have downloaded the model from Model Hub, or run locally using Standard CUDA Engine.'}
               </p>
             </div>
 
-            <div className="pt-2 flex justify-end gap-2">
+            <div className="pt-2 flex justify-end gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => setHostError(null)}
@@ -566,16 +573,21 @@ export function PodsPage() {
               >
                 Dismiss
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setHostError(null);
-                  setShowHostModal(true);
-                }}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all border border-emerald-500 cursor-pointer"
-              >
-                Retry Host
-              </button>
+              {downloadedModels.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const m = downloadedModels[0];
+                    setHostError(null);
+                    if (m) {
+                      await hostModel(m.id, m.name, "standard", 8080);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all border border-emerald-500 cursor-pointer flex items-center gap-1.5 shadow-lg shadow-emerald-950/40"
+                >
+                  <Zap className="w-3.5 h-3.5 fill-current" /> Run on Standard CUDA Engine
+                </button>
+              )}
             </div>
           </div>
         </div>
