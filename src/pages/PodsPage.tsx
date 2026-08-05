@@ -207,16 +207,6 @@ export function PodsPage() {
 
   const availableModelsToHost = downloadedModels.map((m) => ({ id: m.id, name: m.name }));
 
-  const handleSelectHostModel = async (model: { id: string; name: string }) => {
-    setHostError(null);
-    setShowHostModal(false);
-    try {
-      await hostModel(model.id, model.name, "exo", 52415);
-    } catch (err) {
-      // Error handled below via hostError modal
-    }
-  };
-
   const handleRemovePeer = async (ip: string) => {
     try {
       await fetch("http://localhost:14321/api/pods/remove-peer", {
@@ -473,11 +463,11 @@ export function PodsPage() {
       {/* Host Model Selection Modal */}
       {showHostModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121215] border border-[#27272a] rounded-2xl w-full max-w-md p-5 shadow-2xl space-y-4">
+          <div className="bg-[#121215] border border-[#27272a] rounded-2xl w-full max-w-lg p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-[#27272a] pb-3">
               <div className="flex items-center gap-2">
                 <Server className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-sm font-bold text-[#f4f4f5]">Host Model on Exo Pods</h3>
+                <h3 className="text-sm font-bold text-[#f4f4f5]">Host AI Model</h3>
               </div>
               <button
                 type="button"
@@ -489,32 +479,53 @@ export function PodsPage() {
             </div>
 
             <p className="text-xs text-[#a1a1aa]">
-              Select a downloaded model to host across discovered local LAN network nodes.
+              Select a downloaded model and hosting mode. You can pool VRAM across network nodes using <strong>Exo P2P Mesh</strong> or run standalone with 100% GPU offload on <strong>Standard CUDA Engine</strong>.
             </p>
 
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+            <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
               {availableModelsToHost.length === 0 ? (
                 <div className="p-4 rounded-xl bg-[#18181c] border border-[#27272a] text-center text-xs text-[#a1a1aa]">
                   No downloaded models found. Download a model from Model Hub first.
                 </div>
               ) : (
                 availableModelsToHost.map((model) => (
-                  <button
+                  <div
                     key={model.id}
-                    type="button"
-                    onClick={() => handleSelectHostModel(model)}
-                    className="w-full text-left p-3 rounded-xl bg-[#18181c] hover:bg-[#222226] border border-[#27272a] hover:border-[#3f3f46] transition-all flex items-center justify-between cursor-pointer group"
+                    className="p-3.5 rounded-xl bg-[#18181c] border border-[#27272a] hover:border-[#3f3f46] transition-all space-y-2.5"
                   >
-                    <div>
-                      <div className="text-xs font-bold text-[#f4f4f5] group-hover:text-emerald-400 transition-colors">
-                        {model.name}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-[#f4f4f5]">{model.name}</div>
+                        <div className="text-[10px] font-mono text-[#71717a] mt-0.5">{model.id}</div>
                       </div>
-                      <div className="text-[10px] font-mono text-[#71717a] mt-0.5">{model.id}</div>
                     </div>
-                    <span className="text-[10px] font-bold px-2 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      Host Model
-                    </span>
-                  </button>
+                    <div className="flex items-center gap-2 pt-1 border-t border-[#27272a]/60">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setHostError(null);
+                          setShowHostModal(false);
+                          await hostModel(model.id, model.name, "exo", 52415);
+                        }}
+                        className="flex-1 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-400 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        title="Pool VRAM across multiple PCs using Exo P2P Daemon"
+                      >
+                        <Network className="w-3.5 h-3.5" /> Host on Exo P2P Mesh
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setHostError(null);
+                          setShowHostModal(false);
+                          await hostModel(model.id, model.name, "standard", 8080);
+                        }}
+                        className="flex-1 px-3 py-1.5 rounded-lg bg-[#27272a] hover:bg-[#3f3f46] border border-[#3f3f46] text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        title="Load directly into local NVIDIA GPU VRAM via llama-server"
+                      >
+                        <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" /> Host on Standard CUDA
+                      </button>
+                    </div>
+                  </div>
                 ))
               )}
             </div>
