@@ -11,6 +11,7 @@ Falls back gracefully if the exo package is not installed.
 """
 
 import sys
+import os
 import json
 import time
 import threading
@@ -33,6 +34,7 @@ except ImportError as e:
 
 # Also check if `exo` CLI binary is in PATH
 EXO_CLI_AVAILABLE = False
+EXO_CLI_PATH = None
 try:
     result = subprocess.run(
         ["exo", "--help"],
@@ -43,21 +45,36 @@ try:
     )
     if result.returncode == 0 or "exo" in (result.stdout + result.stderr).lower():
         EXO_CLI_AVAILABLE = True
+        EXO_CLI_PATH = "exo"
 except Exception:
     pass
+
+# Check for exo in common install locations
+if not EXO_CLI_AVAILABLE:
+    common_paths = [
+        os.path.join(os.environ.get("APPDATA", ""), "Python", "Python313", "Scripts", "exo.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python", "Python313", "Scripts", "exo.exe"),
+    ]
+    for p in common_paths:
+        if os.path.isfile(p):
+            EXO_CLI_AVAILABLE = True
+            EXO_CLI_PATH = p
+            break
 
 
 class ExoEngine:
     """Manages the Exo P2P daemon subprocess and proxies inference requests.
-    
+
     Exo creates a distributed mesh of devices on the same LAN, pooling their
     VRAM/RAM to run large models across multiple machines.
-    
+
     The daemon exposes an OpenAI-compatible API at http://localhost:52415.
     """
 
     DEFAULT_PORT = 52415
-    STARTUP_TIMEOUT = 15  # seconds to wait for daemon to become ready
+    STARTUP_TIMEOUT = 45  # increased from 15s — Exo needs time to discover peers + load models
+    HEALTH_CHECK_INTERVAL = 30  # seconds between health checks
+    HEALTH_CHECK_MAX_RETRIES = 3  # consecutive failures before marking as dead
 
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
@@ -69,6 +86,11 @@ class ExoEngine:
         self.last_speed: float = 0.0
         self._log_callback = None
         self._log_thread: Optional[threading.Thread] = None
+        self._health_thread: Optional[threading.Thread] = None
+        self._health_stop_event = threading.Event()
+        self._consecutive_failures = 0
+        self._peers = []
+        self._config = None
 
     def _log(self, level: str, message: str):
         """Send log message to the system log callback if registered."""
@@ -85,7 +107,7 @@ class ExoEngine:
         try:
             url = f"{self.api_base}/v1/models"
             req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=2) as resp:
+            with urllib.request.urlopen(req, timeout=3) as resp:
                 return resp.status == 200
         except Exception:
             return False
@@ -93,6 +115,56 @@ class ExoEngine:
     def _check_external_exo(self) -> bool:
         """Check if an externally-running Exo daemon is already available."""
         return self._check_api_ready()
+
+    def _health_monitor(self):
+        """Background thread that monitors Exo daemon health and auto-restarts if needed."""
+        while not self._health_stop_event.is_set():
+            self._health_stop_event.wait(self.HEALTH_CHECK_INTERVAL)
+
+            if not self.is_running or not self.process:
+                continue
+
+            # Check if process is still alive
+            if self.process.poll() is not None:
+                self._log("error", f"Exo daemon process died (exit code: {self.process.poll()}). Attempting restart...")
+                self.is_running = False
+                self._try_restart()
+                continue
+
+            # Check API responsiveness
+            if not self._check_api_ready():
+                self._consecutive_failures += 1
+                self._log("warn", f"Exo API unresponsive (failure #{self._consecutive_failures}/{self.HEALTH_CHECK_MAX_RETRIES})")
+
+                if self._consecutive_failures >= self.HEALTH_CHECK_MAX_RETRIES:
+                    self._log("error", "Exo daemon unresponsive. Attempting restart...")
+                    self.is_running = False
+                    self._try_restart()
+                    self._consecutive_failures = 0
+            else:
+                self._consecutive_failures = 0
+
+    def _try_restart(self):
+        """Attempt to restart the Exo daemon with previous configuration."""
+        if not self._peers and not self.model_name:
+            self._log("warn", "Cannot restart Exo — no previous model or peer config")
+            return
+
+        try:
+            self.stop_daemon()
+            time.sleep(2)
+
+            result = self.start_daemon(
+                model_identifier=self.model_name or "",
+                peers=self._peers or None,
+                config=self._config,
+            )
+            if result.get("status") in ["loaded", "connected"]:
+                self._log("info", "Exo daemon restarted successfully")
+            else:
+                self._log("error", f"Exo daemon restart failed: {result.get('error', 'unknown')}")
+        except Exception as e:
+            self._log("error", f"Exo daemon restart exception: {e}")
 
     def start_daemon(
         self,
@@ -106,11 +178,11 @@ class ExoEngine:
         # NOT a local filesystem path. We always use model_identifier as the HF repo ID.
         # model_path is accepted but ignored — exo auto-discovers its local HF cache.
         """Start the Exo P2P daemon as a background subprocess for multi-PC clustering.
-        
+
         If an external Exo daemon is already running, connects to it instead.
-        
+
         Args:
-            model_identifier: Model to prepare for inference
+            model_identifier: Model to prepare for inference (HF repo ID)
             port: API port (default 52415)
             config: Additional configuration
             peers: List of peer IP addresses to pair with
@@ -122,11 +194,14 @@ class ExoEngine:
             self.api_base = f"http://localhost:{self.api_port}"
 
         self.model_name = model_identifier
+        self._peers = peers or []
+        self._config = config
 
         # Check if an external Exo daemon is already running
         if self._check_external_exo():
             self.is_running = True
             self._log("info", f"Connected to existing Exo daemon at {self.api_base}")
+            self._start_health_monitor()
             return {
                 "status": "connected",
                 "backend": "exo_pods",
@@ -151,10 +226,22 @@ class ExoEngine:
 
         try:
             # Determine the command to launch exo
-            if EXO_CLI_AVAILABLE:
-                cmd = ["exo", "run"]
-            else:
-                cmd = [sys.executable, "-m", "exo", "run"]
+            cmd = None
+            if EXO_CLI_AVAILABLE and EXO_CLI_PATH:
+                # Try 'exo run' first, fallback to just 'exo'
+                cmd = [EXO_CLI_PATH, "run"]
+            elif EXO_AVAILABLE:
+                # Try multiple module entry points
+                cmd = [sys.executable, "-m", "exo.main"]
+
+            if not cmd:
+                err_msg = "No valid Exo entry point found"
+                self._log("error", err_msg)
+                return {
+                    "status": "error",
+                    "backend": "exo_pods",
+                    "error": err_msg,
+                }
 
             # Always pass the HuggingFace model ID (not local path)
             # exo expects IDs like 'mlx-community/Llama-3.3-70B-Instruct-4bit'
@@ -175,11 +262,14 @@ class ExoEngine:
                         cmd.extend(["--peer", clean_ip])
 
             # Prepare environment variables allowing inter-PC access
-            import os
             env = os.environ.copy()
             env["EXO_HOST"] = "0.0.0.0"
+            env["EXO_PORT"] = str(self.api_port)
             if clean_peers:
                 env["EXO_PEERS"] = ",".join(clean_peers)
+            # Disable Metal flush for better performance on Apple Silicon
+            env["METAL_FLUSH_ON_SETMEM"] = "1"
+            env["METAL_DEVICE_WRITE_COMBINE"] = "1"
 
             self._log("info", f"Launching Exo daemon: {' '.join(cmd)} (peers: {clean_peers or 'auto-discovery'})")
 
@@ -204,7 +294,7 @@ class ExoEngine:
                                     lvl = "error" if "error" in stripped.lower() or "fail" in stripped.lower() else "info"
                                     self._log(lvl, stripped)
                                     recent_logs.append(stripped)
-                                    if len(recent_logs) > 20:
+                                    if len(recent_logs) > 50:
                                         recent_logs.pop(0)
                 except Exception:
                     pass
@@ -224,10 +314,11 @@ class ExoEngine:
                 if self._check_api_ready():
                     ready = True
                     break
-                time.sleep(0.5)
+                time.sleep(1.0)
 
             if ready:
                 self.is_running = True
+                self._start_health_monitor()
                 self._log("info", f"Exo P2P daemon is READY at {self.api_base}")
                 return {
                     "status": "loaded",
@@ -238,19 +329,19 @@ class ExoEngine:
             else:
                 exited_code = self.process.poll()
                 self.stop_daemon()
-                log_snippet = " ".join(recent_logs[-5:]) if recent_logs else "No log output captured."
+                log_snippet = " ".join(recent_logs[-10:]) if recent_logs else "No log output captured."
                 if exited_code is not None:
                     err_msg = f"Exo daemon process exited with code {exited_code}. Output: {log_snippet}"
                 else:
                     err_msg = f"Exo daemon API did not respond within {self.STARTUP_TIMEOUT}s on port {self.api_port}."
-                
+
                 self._log("error", f"Exo daemon start failed: {err_msg}")
                 return {
                     "status": "error",
                     "backend": "exo_pods",
                     "model": model_identifier,
                     "error": err_msg,
-                    "install_hint": "Install Exo with Python 3.13: pip install exo-explore",
+                    "install_hint": "Install Exo: pip install git+https://github.com/exo-explore/exo.git (requires macOS/Linux/WSL2)",
                 }
 
         except Exception as e:
@@ -260,11 +351,27 @@ class ExoEngine:
                 "status": "error",
                 "backend": "exo_pods",
                 "error": str(e),
-                "install_hint": "Install Exo with Python 3.13: pip install exo-explore",
+                "install_hint": "Install Exo: pip install git+https://github.com/exo-explore/exo.git (requires macOS/Linux/WSL2)",
             }
+
+    def _start_health_monitor(self):
+        """Start the background health monitoring thread."""
+        if self._health_thread and self._health_thread.is_alive():
+            return
+
+        self._health_stop_event.clear()
+        self._health_thread = threading.Thread(target=self._health_monitor, daemon=True)
+        self._health_thread.start()
+        self._log("info", "Exo health monitor started")
 
     def stop_daemon(self):
         """Gracefully stop the Exo daemon subprocess."""
+        # Stop health monitor first
+        self._health_stop_event.set()
+        if self._health_thread:
+            self._health_thread.join(timeout=3)
+            self._health_thread = None
+
         if self.process:
             self._log("info", "Stopping Exo P2P daemon...")
             try:
@@ -288,6 +395,7 @@ class ExoEngine:
         self.is_generating = False
         self.model_name = None
         self.last_speed = 0.0
+        self._consecutive_failures = 0
 
     def chat_completion(
         self,
@@ -297,7 +405,7 @@ class ExoEngine:
         temperature: float = 0.7,
     ) -> Dict[str, Any]:
         """Proxy a chat completion request to Exo's OpenAI-compatible API.
-        
+
         Exo distributes inference across all connected P2P nodes automatically.
         """
         if not self.is_running:
@@ -331,7 +439,7 @@ class ExoEngine:
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=180) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 response_text = data["choices"][0]["message"]["content"]
                 usage = data.get("usage", {})
@@ -420,6 +528,7 @@ class ExoEngine:
             "last_speed": self.last_speed,
             "cluster": cluster,
             "available": EXO_AVAILABLE or EXO_CLI_AVAILABLE,
+            "cli_path": EXO_CLI_PATH,
         }
 
 

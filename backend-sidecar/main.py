@@ -1775,15 +1775,18 @@ def get_all_local_subnet_prefixes() -> List[str]:
     return list(prefixes)
 
 
+PODS_UDP_PORT = 14322  # Dedicated UDP port for P2P discovery (avoids conflict with TCP 14321)
+
+
 def udp_broadcast_probe():
-    """Send UDP broadcast to port 14321 to discover m0x-flow peer devices on local Wi-Fi / LAN."""
+    """Send UDP broadcast to port 14322 to discover m0x-flow peer devices on local Wi-Fi / LAN."""
     found_ips = set()
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(0.3)
-        sock.sendto(b"m0x-pods-discovery", ("<broadcast>", 14321))
-        sock.sendto(b"m0x-pods-discovery", ("255.255.255.255", 14321))
+        sock.sendto(b"m0x-pods-discovery", ("<broadcast>", PODS_UDP_PORT))
+        sock.sendto(b"m0x-pods-discovery", ("255.255.255.255", PODS_UDP_PORT))
         t0 = time.time()
         while time.time() - t0 < 0.6:
             try:
@@ -2116,7 +2119,7 @@ async def pods_unhost_cluster(req: PodsUnhostClusterRequest):
 
 
 def ensure_windows_firewall_rule():
-    """Ensure Windows Firewall allows inbound connections on TCP/UDP port 14321 and TCP port 52415 for m0x-flow P2P Pods."""
+    """Ensure Windows Firewall allows inbound connections on TCP port 14321, UDP port 14322, and TCP port 52415 for m0x-flow P2P Pods."""
     if sys.platform == "win32":
         try:
             check = subprocess.run(
@@ -2127,7 +2130,7 @@ def ensure_windows_firewall_rule():
             )
             if "No rules match" in check.stdout or not check.stdout:
                 cmd1 = 'netsh advfirewall firewall add rule name="m0x-flow Pods P2P" dir=in action=allow protocol=TCP localport=14321,52415'
-                cmd2 = 'netsh advfirewall firewall add rule name="m0x-flow Pods UDP" dir=in action=allow protocol=UDP localport=14321'
+                cmd2 = 'netsh advfirewall firewall add rule name="m0x-flow Pods UDP" dir=in action=allow protocol=UDP localport=14322'
                 subprocess.run(cmd1, shell=True, capture_output=True)
                 subprocess.run(cmd2, shell=True, capture_output=True)
         except Exception:
@@ -2140,7 +2143,7 @@ def start_background_lan_scanner():
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("0.0.0.0", 14321))
+            sock.bind(("0.0.0.0", PODS_UDP_PORT))
             while True:
                 data, addr = sock.recvfrom(1024)
                 if data == b"m0x-pods-discovery":

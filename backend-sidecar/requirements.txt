@@ -6,9 +6,11 @@ uvicorn[standard]>=0.30.0
 # AI Inference Engines
 llama-cpp-python>=0.2.80
 airllm
-exo-explore
 
 # Model Management & Hardware Diagnostics
 huggingface_hub
 psutil
 
+# Exo Pods - install separately:
+#   pip install git+https://github.com/exo-explore/exo.git
+#   Note: Exo requires macOS, Linux, or WSL2 on Windows
